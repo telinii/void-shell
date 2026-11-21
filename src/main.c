@@ -166,6 +166,7 @@ static void anim_reapply_region(void);
 static void sugg_forget(void);
 static void suggestion_erase(void);
 static void redisplay_now(void);
+static int  sigint_hook(void);
 static void kalc_run(const char *start);
 static int lang_run(const char *start);
 static void lang_load(void);
@@ -189,6 +190,7 @@ static int  sugg_drawn = 0;
 static char *sugg_cmds[SUGG_CMD_MAX];
 static int   sugg_ncmds = 0;
 static int   sugg_cmds_loaded = 0;
+static volatile sig_atomic_t sigint_seen = 0;
 
 static int last_status = 0;
 static long last_duration_ms = -1;
@@ -1276,7 +1278,7 @@ static void anim_render_all(void) {
         hud_mem_update();
         hud_draw();
     }
-    printf("\033[%d;1H", prompt_row);
+    printf("\033[%d;1H\033[s", prompt_row);
     printf("\033[?2026l");
     fflush(stdout);
 }
@@ -1331,7 +1333,12 @@ static void anim_cleanup(void) {
 
 /* Chamado pelo readline enquanto ele espera entrada. */
 static int anim_tick(void) {
+    if (sigint_seen) {
+        sigint_hook();
+        return 0;
+    }
     if (anim_poll_resize()) {
+        rl_set_screen_size(anim_rows, anim_cols);
         int ok = (anim_cols >= ANIM_MIN_COLS && anim_rows >= ANIM_MIN_ROWS);
         if (ok) {
             anim_enabled = 1;
@@ -2089,6 +2096,8 @@ static void print_tutorial(void) {
            tr("leave the shell (Ctrl+D)", "sai do shell (Ctrl+D)"), R);
     printf("  %s↑/↓%s        %s%s%s\n", C, R, T,
            tr("history    Tab  completion", "histórico    Tab  completar"), R);
+    printf("  %sCtrl+C%s     %s%s%s\n", C, R, T,
+           tr("cancel the current line", "cancela a linha atual"), R);
     printf("  %s→%s          %s%s%s\n", C, R, T,
            tr("accept the gray suggestion (commands, paths)",
               "aceita a sugestão cinza (comandos, caminhos)"), R);
@@ -3515,6 +3524,29 @@ static int suggestion_newline(int count, int key) {
     return rl_newline(count, key);
 }
 
+/* Ctrl+C no prompt: cancela a linha e desenha um prompt limpo, sem matar
+   o shell. Com rl_catch_signals = 0, o readline chama este hook quando o
+   read() e interrompido pelo sinal; aqui ja estamos em contexto seguro. */
+static void sigint_handler(int sig) {
+    (void)sig;
+    sigint_seen = 1;
+}
+
+static int sigint_hook(void) {
+    if (!sigint_seen) return 0;
+    sigint_seen = 0;
+    sugg_forget();
+    /* A animacao salva/restaura o cursor com ESC[s/ESC[u. Se um frame foi
+       interrompido no meio, o cursor pode ter ficado na area das estrelas;
+       ESC[u o traz de volta ao prompt antes de limpar a linha. */
+    if (anim_enabled) printf("\033[u");
+    printf("\r\033[K");
+    rl_replace_line("", 0);
+    rl_point = rl_end = 0;
+    rl_forced_update_display();
+    return 0;
+}
+
 static void save_history(void) {
     write_history(histfile);
 }
@@ -3529,6 +3561,11 @@ int main(void) {
     signal(SIGCHLD, sigchld_handler);
     signal(SIGTTOU, SIG_IGN);
     signal(SIGTTIN, SIG_IGN);
+    struct sigaction sa_int;
+    memset(&sa_int, 0, sizeof(sa_int));
+    sa_int.sa_handler = sigint_handler;
+    sigemptyset(&sa_int.sa_mask);
+    sigaction(SIGINT, &sa_int, NULL);
     if (isatty(STDIN_FILENO)) {
         shell_terminal = STDIN_FILENO;
         setpgid(0, 0);
@@ -3539,12 +3576,14 @@ int main(void) {
     print_banner();
     anim_setup();
     if (isatty(STDOUT_FILENO)) print_tutorial();
+    rl_catch_signals = 0;   /* Ctrl+C e tratado por sigint_hook, sem sair */
     rl_initialize();
     rl_set_keyboard_input_timeout(80000);
     rl_event_hook = anim_tick;
     rl_add_defun("void-clear-screen", anim_clear_key, '\x0c');
     rl_add_defun("void-command-palette", palette_key, 16);
     rl_redisplay_function = suggestion_redisplay;
+    rl_signal_event_hook = sigint_hook;
     rl_add_defun("void-accept-suggestion", suggestion_accept, -1);
     rl_bind_keyseq("\\e[C", suggestion_accept);
     rl_bind_keyseq("\\eOC", suggestion_accept);
@@ -3556,6 +3595,7 @@ int main(void) {
 
     for (;;) {
         if (anim_poll_resize()) {
+            rl_set_screen_size(anim_rows, anim_cols);
             int ok = (anim_cols >= ANIM_MIN_COLS && anim_rows >= ANIM_MIN_ROWS);
             if (ok) {
                 anim_enabled = 1;
@@ -3571,6 +3611,8 @@ int main(void) {
         char prompt[128];
         snprintf(prompt, sizeof(prompt),
                  "\001%s\002void-shell> \001%s\002", theme_prompt, theme_text);
+        sigint_seen = 0;
+        if (shell_terminal >= 0) tcsetpgrp(shell_terminal, shell_pgid);
         char *input = readline(prompt);
         printf("\033[0m");
         if (!anim_logo_pinned) anim_logo_live = 0;

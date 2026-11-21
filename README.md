@@ -15,6 +15,8 @@ aprender sistemas operacionais e programação de baixo nível.
 - Sequência e condicionais: `;`, `&&`, `||`
 - Background: `comando &`, `jobs`, `fg`
 - Histórico persistente com setas e Tab (readline)
+- `Ctrl+C` cancela a linha atual sem encerrar o shell (inclusive com
+  sugestão ativa); `Ctrl+D` sai
 - Sugestões inline estilo fish: texto cinza completa o comando a partir do
   histórico, comandos internos, atalhos e executáveis do `PATH`, e completa
   caminhos/arquivos nos argumentos (`cd Doc` → `Documents/`, `ls ma` →
