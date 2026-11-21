@@ -21,6 +21,10 @@
 #define MAX_CMDS 16
 #define MAX_TOKEN 4096
 
+/* Roxo um pouco mais claro: texto digitado pelo usuario e conteudo das paginas. */
+#define VOID_TEXT_RGB   "190;150;255"
+#define VOID_TEXT_COLOR "\033[38;2;" VOID_TEXT_RGB "m"
+
 static void anim_clear_screen(void);
 static void anim_reapply_region(void);
 static void kalc_run(const char *start);
@@ -1125,7 +1129,7 @@ static int anim_tick(void) {
     if (anim_logo_live) {
         draw_block(logo_lines, 7, ANIM_HEADER_ROWS + 1, anim_cols, anim_offset);
     }
-    printf("\033[u\033[?2026l");
+    printf("\033[u" VOID_TEXT_COLOR "\033[?2026l");
     fflush(stdout);
     return 0;
 }
@@ -1527,6 +1531,7 @@ static const KalcTopic kalc_topics[] = {
 #define KALC_MENU_QUIT (KALC_MENU_TOP + KALC_NTOPICS + 1)
 
 #define KALC_PURPLE "\033[38;2;180;130;255m"
+#define KALC_TEXT   VOID_TEXT_COLOR
 #define KALC_DIM    "\033[38;2;120;110;140m"
 #define KALC_SEL    "\033[48;2;70;40;120m\033[38;2;255;255;255m"
 #define KALC_RESET  "\033[0m"
@@ -1607,13 +1612,13 @@ static void kalc_render_menu(int sel) {
         if (i == sel)
             printf("%s > [%d]  %s %s", KALC_SEL, i + 1, kalc_title(&kalc_topics[i]), KALC_RESET);
         else
-            printf("   [%d]  %s", i + 1, kalc_title(&kalc_topics[i]));
+            printf("   [%d]  %s%s%s", i + 1, KALC_TEXT, kalc_title(&kalc_topics[i]), KALC_RESET);
     }
     printf("\033[%d;3H", KALC_MENU_QUIT);
     if (sel == KALC_NTOPICS)
         printf("%s > [q]  %s %s", KALC_SEL, tr("Quit", "Sair"), KALC_RESET);
     else
-        printf("   [q]  %s", tr("Quit", "Sair"));
+        printf("   [q]  %s%s%s", KALC_TEXT, tr("Quit", "Sair"), KALC_RESET);
     printf("\033[%d;3H%s%s%s", KALC_MENU_QUIT + 2, KALC_DIM,
            tr("Click a topic, or use ↑/↓ + Enter.",
               "Clique em um tópico, ou use ↑/↓ + Enter."), KALC_RESET);
@@ -1671,9 +1676,9 @@ static int kalc_render_topic(int idx, int scroll) {
         if (line[0] == '#' && line[1] == ' ') {
             printf("%s%s%s", KALC_PURPLE, line + 2, KALC_RESET);
         } else if (line[0] == '-' && line[1] == ' ') {
-            printf("%s•%s %s", KALC_PURPLE, KALC_RESET, line + 2);
+            printf("%s•%s %s%s", KALC_PURPLE, KALC_TEXT, line + 2, KALC_RESET);
         } else {
-            printf("%s", line);
+            printf("%s%s%s", KALC_TEXT, line, KALC_RESET);
         }
     }
     printf("\033[%d;3H%s[<] %s%s   ↑/↓ %s   q %s   %d/%d",
@@ -1937,16 +1942,16 @@ static void lang_render(int sel) {
         if (i == sel)
             printf("%s > [%d]  %s%s %s", KALC_SEL, i + 1, lang_names[i], cur, KALC_RESET);
         else
-            printf("   [%d]  %s%s", i + 1, lang_names[i], cur);
+            printf("   [%d]  %s%s%s%s", i + 1, KALC_TEXT, lang_names[i], cur, KALC_RESET);
     }
-    printf("\033[%d;3H%s%s%s", LANG_PHRASE_ROW, KALC_DIM,
+    printf("\033[%d;3H%s%s%s", LANG_PHRASE_ROW, KALC_TEXT,
            tr("More language support coming",
               "Mais suporte a idiomas em breve"), KALC_RESET);
     printf("\033[%d;3H", LANG_MENU_QUIT);
     if (sel == LANG_MENU_N)
         printf("%s > [q]  %s %s", KALC_SEL, tr("Cancel", "Cancelar"), KALC_RESET);
     else
-        printf("   [q]  %s", tr("Cancel", "Cancelar"));
+        printf("   [q]  %s%s%s", KALC_TEXT, tr("Cancel", "Cancelar"), KALC_RESET);
     printf("\033[%d;3H%s%s%s", LANG_HINT_ROW, KALC_DIM,
            tr("Click a language, or use ↑/↓ + Enter.",
               "Clique em um idioma, ou use ↑/↓ + Enter."), KALC_RESET);
@@ -2095,7 +2100,8 @@ int main(void) {
                 fflush(stdout);
             }
         }
-        char *input = readline("\001\033[38;2;140;90;220m\002void-shell> \001\033[0m\002");
+        char *input = readline("\001\033[38;2;140;90;220m\002void-shell> \001" VOID_TEXT_COLOR "\002");
+        printf("\033[0m");
         if (!anim_logo_pinned) anim_logo_live = 0;
         if (!input) { /* EOF (Ctrl+D) */
             printf("\n");
