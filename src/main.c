@@ -816,17 +816,20 @@ static void print_gradient(const char *s) {
 
 static void print_banner(void) {
     if (!isatty(STDOUT_FILENO)) return;
-    /* logo: anel (vazio) */
-    print_gradient("      .............");
-    print_gradient("    ..             ..");
-    print_gradient("  ..   ...........   ..");
-    print_gradient(" .   ..           ..   .");
-    print_gradient(".   .               .   .");
-    print_gradient(".   .               .   .");
-    print_gradient(" .   ..           ..   .");
-    print_gradient("  ..   ...........   ..");
-    print_gradient("    ..             ..");
-    print_gradient("      .............");
+    /* logo: galaxia (vazio estrelado) */
+    print_gradient("                .  *  .  *  .  *  .  *");
+    print_gradient("          .  *  .  *  .  *  .  *  .  *  .");
+    print_gradient("      .  *  .  *  .  *  .  *  .  *  .  *  .");
+    print_gradient("    .  *  .  *  .  *  .  *  .  *  .  *  .  *");
+    print_gradient("  .  *  .  *  .  *  .  *  .  *  .  *  .  *  .");
+    print_gradient(" .  *  .  *  .  *  .  *  .  *  .  *  .  *  .  .");
+    print_gradient(".  *  .  *  .  *  .  *  .  *  .  *  .  *  .  *  .");
+    print_gradient(" .  *  .  *  .  *  .  *  .  *  .  *  .  *  .  .");
+    print_gradient("  .  *  .  *  .  *  .  *  .  *  .  *  .  *  .");
+    print_gradient("    .  *  .  *  .  *  .  *  .  *  .  *  .  *");
+    print_gradient("      .  *  .  *  .  *  .  *  .  *  .  *  .");
+    print_gradient("          .  *  .  *  .  *  .  *  .  *  .");
+    print_gradient("                .  *  .  *  .  *  .  *");
     printf("\n");
     print_gradient("+------------------------------------------+");
     print_gradient("|            VOID-SHELL  v11               |");
