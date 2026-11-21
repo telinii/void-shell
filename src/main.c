@@ -51,6 +51,58 @@ static void sigchld_handler(int sig) {
 }
 
 typedef struct {
+    char *name;
+    char *value;
+    int exported;
+} ShellVar;
+
+static ShellVar shell_vars[256];
+static int nshell_vars = 0;
+
+static ShellVar *find_var(const char *name) {
+    for (int i = 0; i < nshell_vars; i++) {
+        if (strcmp(shell_vars[i].name, name) == 0) return &shell_vars[i];
+    }
+    return NULL;
+}
+
+static void set_var(const char *name, const char *value, int exported) {
+    ShellVar *v = find_var(name);
+    if (!v) {
+        if (nshell_vars >= 256) return;
+        v = &shell_vars[nshell_vars++];
+        v->name = strdup(name);
+        v->value = NULL;
+        v->exported = 0;
+    }
+    free(v->value);
+    v->value = strdup(value ? value : "");
+    if (exported) {
+        v->exported = 1;
+        setenv(name, v->value, 1);
+    }
+}
+
+static const char *get_var(const char *name) {
+    ShellVar *v = find_var(name);
+    if (v) return v->value;
+    return getenv(name);
+}
+
+static void unset_var(const char *name) {
+    for (int i = 0; i < nshell_vars; i++) {
+        if (strcmp(shell_vars[i].name, name) == 0) {
+            free(shell_vars[i].name);
+            free(shell_vars[i].value);
+            for (int j = i; j < nshell_vars - 1; j++) shell_vars[j] = shell_vars[j+1];
+            nshell_vars--;
+            unsetenv(name);
+            return;
+        }
+    }
+}
+
+typedef struct {
     char *argv[MAX_ARGS];
     int argc;
     char *infile;
@@ -120,9 +172,9 @@ static int tokenize(char *line, char **argv) {
                         name[ni++] = *p++;
                     }
                     name[ni] = '\0';
-                    char *val = getenv(name);
+                    const char *val = get_var(name);
                     if (val) {
-                        for (char *q = val; *q; q++) {
+                        for (const char *q = val; *q; q++) {
                             if (bi < MAX_TOKEN - 1) buf[bi++] = *q;
                         }
                     }
@@ -207,6 +259,47 @@ static int do_builtin(char **argv) {
         }
         fprintf(stderr, "fg: no such job\n");
         last_status = 1;
+        return 1;
+    }
+    if (strcmp(argv[0], "export") == 0) {
+        if (argv[1] == NULL) {
+            for (int i = 0; i < nshell_vars; i++) {
+                if (shell_vars[i].exported)
+                    printf("export %s=%s\n", shell_vars[i].name, shell_vars[i].value);
+            }
+            last_status = 0;
+            return 1;
+        }
+        for (int i = 1; argv[i]; i++) {
+            char *eq = strchr(argv[i], '=');
+            if (eq) {
+                *eq = '\0';
+                set_var(argv[i], eq + 1, 1);
+                *eq = '=';
+            } else {
+                /* mark existing as exported */
+                ShellVar *v = find_var(argv[i]);
+                if (v) {
+                    v->exported = 1;
+                    setenv(v->name, v->value, 1);
+                } else {
+                    set_var(argv[i], "", 1);
+                }
+            }
+        }
+        last_status = 0;
+        return 1;
+    }
+    if (strcmp(argv[0], "unset") == 0) {
+        for (int i = 1; argv[i]; i++) unset_var(argv[i]);
+        last_status = 0;
+        return 1;
+    }
+    if (strcmp(argv[0], "set") == 0) {
+        for (int i = 0; i < nshell_vars; i++) {
+            printf("%s=%s\n", shell_vars[i].name, shell_vars[i].value);
+        }
+        last_status = 0;
         return 1;
     }
     if (strcmp(argv[0], "echo") == 0) {
@@ -399,15 +492,36 @@ static void run_command_str(char *cmd) {
         }
     }
 
-    if (strchr(cmd, '|')) {
+    char *argv[MAX_ARGS];
+    int argc = tokenize(cmd, argv);
+    if (argc == 0) return;
+
+    /* leading assignments: VAR=value */
+    int nassign = 0;
+    while (nassign < argc && strchr(argv[nassign], '=') && argv[nassign][0] != '=') {
+        char *eq = strchr(argv[nassign], '=');
+        *eq = '\0';
+        set_var(argv[nassign], eq + 1, 0);
+        nassign++;
+    }
+    if (nassign == argc) {
+        return; /* only assignments */
+    }
+    if (nassign > 0) {
+        for (int k = 0; k < nassign; k++) {
+            setenv(argv[k], argv[k] + strlen(argv[k]) + 1, 1);
+        }
+        memmove(argv, argv + nassign, (argc - nassign + 1) * sizeof(char *));
+        argc -= nassign;
+    }
+
+    /* pipeline (sem assignments) */
+    if (nassign == 0 && strchr(cmd, '|')) {
         char *copy = strdup(cmd);
         run_pipeline(copy);
         free(copy);
         return;
     }
-    char *argv[MAX_ARGS];
-    int argc = tokenize(cmd, argv);
-    if (argc == 0) return;
 
     char *infile = NULL, *outfile = NULL;
     int append = 0;
