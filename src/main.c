@@ -797,14 +797,42 @@ static void run_line(char *line) {
 
 static char histfile[4096];
 
+static void print_gradient(const char *s) {
+    int len = strlen(s);
+    for (int i = 0; i < len; i++) {
+        int seg = (len > 1) ? (i * 5 / len) : 0;
+        int r, g, b;
+        switch (seg) {
+            case 0: r = 255; g = 255; b = 255; break; /* branco */
+            case 1: r = 180; g = 130; b = 255; break; /* roxo claro */
+            case 2: r = 90;  g = 40;  b = 150; break; /* roxo escuro */
+            case 3: r = 80;  g = 80;  b = 90;  break; /* cinza */
+            default:r = 20;  g = 20;  b = 25;  break; /* quase preto */
+        }
+        printf("\033[38;2;%d;%d;%dm%c", r, g, b, s[i]);
+    }
+    printf("\033[0m\n");
+}
+
 static void print_banner(void) {
     if (!isatty(STDOUT_FILENO)) return;
-    printf("\033[1;36m");
-    printf("+------------------------------------------+\n");
-    printf("|            VOID-SHELL  v10               |\n");
-    printf("|        mini shell educacional em C       |\n");
-    printf("+------------------------------------------+\n");
-    printf("\033[0m\n");
+    /* logo: anel (vazio) */
+    print_gradient("      .............");
+    print_gradient("    ..             ..");
+    print_gradient("  ..   ...........   ..");
+    print_gradient(" .   ..           ..   .");
+    print_gradient(".   .               .   .");
+    print_gradient(".   .               .   .");
+    print_gradient(" .   ..           ..   .");
+    print_gradient("  ..   ...........   ..");
+    print_gradient("    ..             ..");
+    print_gradient("      .............");
+    printf("\n");
+    print_gradient("+------------------------------------------+");
+    print_gradient("|            VOID-SHELL  v11               |");
+    print_gradient("|        mini shell educacional em C       |");
+    print_gradient("+------------------------------------------+");
+    printf("\n");
 }
 
 static void save_history(void) {
