@@ -473,6 +473,23 @@ static void run_command_str(char *cmd);
 
 static void run_line(char *line);
 
+static int find_matching(const char *s, char open, char close) {
+    int depth = 0;
+    int in_s = 0, in_d = 0;
+    for (int i = 0; s[i]; i++) {
+        if (in_s) { if (s[i] == '\'') in_s = 0; continue; }
+        if (in_d) { if (s[i] == '"') in_d = 0; continue; }
+        if (s[i] == '\'') { in_s = 1; continue; }
+        if (s[i] == '"') { in_d = 1; continue; }
+        if (s[i] == open) depth++;
+        else if (s[i] == close) {
+            depth--;
+            if (depth == 0) return i;
+        }
+    }
+    return -1;
+}
+
 static void run_command_str(char *cmd) {
     /* detect trailing & (background) */
     char *c = cmd;
@@ -489,6 +506,56 @@ static void run_command_str(char *cmd) {
             while (len > 0 && (c[len-1] == ' ' || c[len-1] == '\t')) c[--len] = '\0';
             bg_current = 1;
             bg_cmd = c;
+        }
+    }
+
+    /* trim leading spaces */
+    while (*cmd == ' ' || *cmd == '\t') cmd++;
+
+    /* subshell ( ... ) */
+    if (cmd[0] == '(') {
+        int idx = find_matching(cmd, '(', ')');
+        if (idx > 0) {
+            char *inner = strndup(cmd + 1, idx - 1);
+            if (bg_current) {
+                pid_t pid = fork();
+                if (pid == 0) {
+                    run_line(inner);
+                    exit(last_status);
+                }
+                if (njobs < MAX_JOBS) {
+                    jobs[njobs].id = next_jobid++;
+                    jobs[njobs].pid = pid;
+                    jobs[njobs].cmd = strdup(inner);
+                    jobs[njobs].running = 1;
+                    njobs++;
+                    printf("[%d] %d\n", jobs[njobs-1].id, pid);
+                }
+                free(inner);
+                return;
+            }
+            pid_t pid = fork();
+            if (pid == 0) {
+                run_line(inner);
+                exit(last_status);
+            }
+            int status;
+            waitpid(pid, &status, 0);
+            if (WIFEXITED(status)) last_status = WEXITSTATUS(status);
+            else if (WIFSIGNALED(status)) last_status = 128 + WTERMSIG(status);
+            free(inner);
+            return;
+        }
+    }
+
+    /* group { ... } */
+    if (cmd[0] == '{') {
+        int idx = find_matching(cmd, '{', '}');
+        if (idx > 0) {
+            char *inner = strndup(cmd + 1, idx - 1);
+            run_line(inner);
+            free(inner);
+            return;
         }
     }
 
@@ -563,11 +630,12 @@ static void run_line(char *line) {
     char buf[MAX_TOKEN * 4];
     int bi = 0;
     int in_s = 0, in_d = 0;
+    int depth = 0;
     int next_op = 0; /* 0=SEMI,1=AND,2=OR */
     char *p = line;
 
     while (*p) {
-        if (!in_s && !in_d) {
+        if (!in_s && !in_d && depth == 0) {
             if (*p == ';') {
                 buf[bi] = '\0';
                 trim_str(buf);
@@ -610,6 +678,10 @@ static void run_line(char *line) {
                 while (*p == ' ' || *p == '\t') p++;
                 continue;
             }
+        }
+        if (!in_s && !in_d) {
+            if (*p == '(' || *p == '{') depth++;
+            else if (*p == ')' || *p == '}') depth--;
         }
         if (*p == '\'') { in_s = !in_s; buf[bi++] = *p++; continue; }
         if (*p == '"') { in_d = !in_d; buf[bi++] = *p++; continue; }
