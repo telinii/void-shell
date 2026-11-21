@@ -25,6 +25,9 @@ aprender sistemas operacionais e programação de baixo nível.
   (padrão: English)
 - Guia rápido de boas-vindas ao abrir o shell; `/tutorial` (ou `/help`)
   mostra o guia de novo
+- HUD fixa na última linha: diretório atual (`~`), branch do git com `*`
+  quando há alterações, status e duração do último comando (`ok`/`err`),
+  jobs em background, idioma, hora, uso de CPU e RAM (lidos de `/proc`)
 
 ## Build
 

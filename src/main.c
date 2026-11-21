@@ -16,6 +16,8 @@
 #include <poll.h>
 #include <termios.h>
 #include <strings.h>
+#include <sys/stat.h>
+#include <limits.h>
 
 #define MAX_ARGS 64
 #define MAX_CMDS 16
@@ -32,8 +34,13 @@ static int lang_run(const char *start);
 static void lang_load(void);
 static const char *tr(const char *en, const char *pt);
 static void print_tutorial(void);
+static void hud_draw(void);
+static void hud_tick(void);
+static void hud_cpu_update(void);
+static void hud_mem_update(void);
 
 static int last_status = 0;
+static long last_duration_ms = -1;
 
 #define MAX_JOBS 64
 typedef struct {
@@ -969,6 +976,11 @@ static int draw_block(const char *const *lines, int n, int start_row, int cols, 
 #define ANIM_MIN_ROWS    16
 #define ANIM_FRAME_MS    80
 
+/* HUD fixa na ultima linha. Precisa de espaco para o banner e o prompt. */
+#define HUD_MIN_COLS     60
+#define HUD_MIN_ROWS     20
+#define HUD_REFRESH_MS   1000
+
 static int anim_enabled = 0;
 static int anim_offset = 0;
 static int anim_rows = 24;
@@ -976,8 +988,19 @@ static int anim_cols = 80;
 static int anim_logo_live = 0;    /* banner pode ser redesenhado agora? */
 static int anim_logo_pinned = 0;  /* banner esta fixo acima da regiao? */
 static int anim_region_top = 2;   /* topo da regiao de rolagem atual */
+static int anim_region_bottom = 24; /* fim da regiao (HUD ocupa a ultima linha) */
 static int anim_prompt_row = 2;   /* linha onde o prompt comeca */
 static struct timespec anim_last;
+
+static int hud_enabled = 0;
+static int hud_row = 24;
+static int hud_force = 1;
+static long hud_last_ms = -100000;
+static int hud_cpu_pct = -1;
+static long hud_mem_used_mb = -1;
+static long hud_mem_total_mb = -1;
+static long long hud_prev_idle = -1;
+static long long hud_prev_total = -1;
 
 static void anim_read_size(void) {
     struct winsize ws;
@@ -1013,6 +1036,7 @@ static void anim_render_static(void) {
     int rows = anim_rows, cols = anim_cols;
     anim_logo_live = 0;
     anim_logo_pinned = 0;
+    hud_enabled = 0;
     printf("\033[r\033[2J\033[H");
     draw_block(galaxy_lines, 13, 1, cols, anim_offset);
     printf("\033[%d;1H\033[K", ANIM_HEADER_ROWS);
@@ -1040,9 +1064,13 @@ static void anim_render_all(void) {
     draw_block(galaxy_lines, 13, 1, cols, anim_offset);
     printf("\033[%d;1H\033[K", ANIM_HEADER_ROWS);
 
-    int region_top, prompt_row, logo_pinned = 0;
+    int hud = (cols >= HUD_MIN_COLS && rows >= HUD_MIN_ROWS);
+    int region_bottom = hud ? rows - 1 : rows;
+
+    int region_top, prompt_row, logo_pinned = 0, logo_live = 0;
     if (banner_end <= rows) {
         draw_block(logo_lines, 7, banner_top, cols, anim_offset);
+        logo_live = 1;
         prompt_row = banner_end;
         if (rows >= banner_end + 8) {
             region_top = banner_end;   /* terminal alto: banner fica fixo */
@@ -1055,17 +1083,26 @@ static void anim_render_all(void) {
         region_top = banner_top;
     }
 
-    if (region_top > rows - 1) region_top = rows - 1;
+    if (region_top > region_bottom - 1) region_top = region_bottom - 1;
     if (region_top < 2) region_top = 2;
     if (prompt_row < region_top) prompt_row = region_top;
-    if (prompt_row > rows) prompt_row = rows;
+    if (prompt_row > region_bottom) prompt_row = region_bottom;
 
     anim_logo_pinned = logo_pinned;
-    anim_logo_live = 1;
+    anim_logo_live = logo_live;
     anim_region_top = region_top;
+    anim_region_bottom = region_bottom;
     anim_prompt_row = prompt_row;
+    hud_enabled = hud;
+    hud_row = rows;
+    hud_force = 1;
 
-    printf("\033[%d;%dr", region_top, rows);
+    printf("\033[%d;%dr", region_top, region_bottom);
+    if (hud) {
+        hud_cpu_update();
+        hud_mem_update();
+        hud_draw();
+    }
     printf("\033[%d;1H", prompt_row);
     printf("\033[?2026l");
     fflush(stdout);
@@ -1103,13 +1140,17 @@ static void anim_reapply_region(void) {
     if (!anim_enabled) return;
     /* Salva o cursor: alguns terminais (kitty incluso) movem o cursor para o
        topo da regiao ao aplicar DECSTBM. Sem isso o prompt volta pra cima. */
-    printf("\033[s\033[%d;%dr\033[u", anim_region_top, anim_rows);
+    printf("\033[s\033[%d;%dr", anim_region_top, anim_region_bottom);
+    hud_force = 1;
+    hud_tick();
+    printf("\033[u" VOID_TEXT_COLOR);
     fflush(stdout);
 }
 
 static void anim_cleanup(void) {
     if (!isatty(STDOUT_FILENO)) return;
     printf("\033[?2026l\033[r");
+    if (hud_enabled && hud_row > 0) printf("\033[%d;1H\033[K", hud_row);
     if (anim_rows > 0) printf("\033[%d;1H", anim_rows);
     printf("\033[0m");
     fflush(stdout);
@@ -1124,7 +1165,8 @@ static int anim_tick(void) {
             anim_render_all();
         } else {
             anim_enabled = 0;
-            printf("\033[r\033[%d;1H", anim_rows > 0 ? anim_rows : 24);
+            hud_enabled = 0;
+            printf("\033[r\033[%d;1H\033[K", anim_rows > 0 ? anim_rows : 24);
             fflush(stdout);
         }
         rl_on_new_line();
@@ -1147,6 +1189,7 @@ static int anim_tick(void) {
     if (anim_logo_live) {
         draw_block(logo_lines, 7, ANIM_HEADER_ROWS + 1, anim_cols, anim_offset);
     }
+    hud_tick();
     printf("\033[u" VOID_TEXT_COLOR "\033[?2026l");
     fflush(stdout);
     return 0;
@@ -1217,6 +1260,294 @@ static void lang_save(void) {
     if (!f) return;
     fprintf(f, "%s\n", current_lang == LANG_PT ? "pt" : "en");
     fclose(f);
+}
+
+/* ================================================================== */
+/* HUD: barra de status fixa na ultima linha                          */
+/* ================================================================== */
+
+static void hud_path(char *out, size_t n) {
+    char cwd[PATH_MAX];
+    if (!getcwd(cwd, sizeof(cwd))) { snprintf(out, n, "?"); return; }
+    const char *home = getenv("HOME");
+    if (home && *home) {
+        size_t hl = strlen(home);
+        if (strncmp(cwd, home, hl) == 0 && (cwd[hl] == '/' || cwd[hl] == '\0')) {
+            snprintf(out, n, "~%s", cwd + hl);
+            return;
+        }
+    }
+    snprintf(out, n, "%s", cwd);
+}
+
+/* Executa um comando e captura a saida (sem shell, sem herdar o terminal). */
+static int hud_capture(const char *const argv[], char *out, size_t cap) {
+    int fds[2];
+    if (pipe(fds) != 0) return -1;
+    pid_t pid = fork();
+    if (pid < 0) { close(fds[0]); close(fds[1]); return -1; }
+    if (pid == 0) {
+        setpgid(0, 0);
+        close(fds[0]);
+        dup2(fds[1], STDOUT_FILENO);
+        close(fds[1]);
+        int dn = open("/dev/null", O_WRONLY);
+        if (dn >= 0) { dup2(dn, STDERR_FILENO); close(dn); }
+        execvp(argv[0], (char *const *)argv);
+        _exit(127);
+    }
+    close(fds[1]);
+    size_t total = 0;
+    for (;;) {
+        char sink[256];
+        char *dst = (total + 1 < cap) ? out + total : sink;
+        size_t room = (total + 1 < cap) ? cap - 1 - total : sizeof(sink);
+        ssize_t r = read(fds[0], dst, room);
+        if (r > 0) { if (dst == out) total += (size_t)r; continue; }
+        if (r < 0 && errno == EINTR) continue;
+        break;
+    }
+    out[total] = '\0';
+    close(fds[0]);
+    int st = 0;
+    while (waitpid(pid, &st, 0) < 0 && errno == EINTR) {}
+    return 0;
+}
+
+static int hud_is_repo(void) {
+    char cwd[PATH_MAX];
+    if (!getcwd(cwd, sizeof(cwd))) return 0;
+    for (;;) {
+        char p[PATH_MAX + 8];
+        struct stat st;
+        snprintf(p, sizeof(p), "%s/.git", cwd);
+        if (stat(p, &st) == 0) return 1;
+        char *slash = strrchr(cwd, '/');
+        if (!slash || slash == cwd) break;
+        *slash = '\0';
+    }
+    return 0;
+}
+
+/* Branch + sujeira do git, com cache curto para nao pesar na digitacao. */
+static void hud_git(char *branch, size_t n, int *dirty) {
+    static char cached_cwd[PATH_MAX];
+    static char cached_branch[128];
+    static int cached_dirty = 0;
+    static int valid = 0;
+    static long long last_ms = -1000000;
+
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    long long ms = (long long)now.tv_sec * 1000 + now.tv_nsec / 1000000;
+
+    char cwd[PATH_MAX];
+    if (!getcwd(cwd, sizeof(cwd))) cwd[0] = '\0';
+
+    if (!valid || strcmp(cwd, cached_cwd) != 0 || ms - last_ms >= 2000) {
+        snprintf(cached_cwd, sizeof(cached_cwd), "%s", cwd);
+        cached_branch[0] = '\0';
+        cached_dirty = 0;
+        last_ms = ms;
+        if (hud_is_repo()) {
+            char out[2048];
+            const char *argv[] = {
+                "git", "--no-optional-locks", "status", "--porcelain=v1",
+                "--branch", "--untracked-files=no", NULL
+            };
+            if (hud_capture(argv, out, sizeof(out)) == 0) {
+                char *nl = strchr(out, '\n');
+                char *rest = nl ? nl + 1 : out + strlen(out);
+                if (nl) *nl = '\0';
+                if (strncmp(out, "## ", 3) == 0) {
+                    char *b = out + 3;
+                    if (strncmp(b, "No commits yet on ", 18) == 0) b += 18;
+                    char *cut = strstr(b, "...");
+                    if (!cut) cut = strchr(b, ' ');
+                    if (cut) *cut = '\0';
+                    snprintf(cached_branch, sizeof(cached_branch), "%s", b);
+                }
+                for (char *p = rest; *p; ) {
+                    char *e = strchr(p, '\n');
+                    if (e) *e = '\0';
+                    if (*p) cached_dirty = 1;
+                    if (!e) break;
+                    p = e + 1;
+                }
+            }
+        }
+        valid = 1;
+    }
+    snprintf(branch, n, "%s", cached_branch);
+    *dirty = cached_dirty;
+}
+
+static void hud_cpu_update(void) {
+    FILE *f = fopen("/proc/stat", "r");
+    if (!f) { hud_cpu_pct = -1; return; }
+    char line[256];
+    long long v[8] = {0};
+    int got = 0;
+    if (fgets(line, sizeof(line), f))
+        got = sscanf(line, "cpu %lld %lld %lld %lld %lld %lld %lld %lld",
+                     &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6], &v[7]);
+    fclose(f);
+    if (got < 4) { hud_cpu_pct = -1; return; }
+    long long idle = v[3] + (got > 4 ? v[4] : 0);
+    long long total = 0;
+    for (int i = 0; i < got && i < 8; i++) total += v[i];
+    if (hud_prev_total > 0 && total > hud_prev_total) {
+        long long dt = total - hud_prev_total;
+        long long di = idle - hud_prev_idle;
+        hud_cpu_pct = (int)(100 * (dt - di) / dt);
+        if (hud_cpu_pct < 0) hud_cpu_pct = 0;
+        if (hud_cpu_pct > 100) hud_cpu_pct = 100;
+    }
+    hud_prev_total = total;
+    hud_prev_idle = idle;
+}
+
+static void hud_mem_update(void) {
+    FILE *f = fopen("/proc/meminfo", "r");
+    if (!f) { hud_mem_used_mb = hud_mem_total_mb = -1; return; }
+    char line[256];
+    long total_kb = -1, avail_kb = -1;
+    while (fgets(line, sizeof(line), f)) {
+        long val;
+        if (sscanf(line, "MemTotal: %ld kB", &val) == 1) { total_kb = val; continue; }
+        if (sscanf(line, "MemAvailable: %ld kB", &val) == 1) { avail_kb = val; continue; }
+    }
+    fclose(f);
+    if (total_kb <= 0 || avail_kb < 0) {
+        hud_mem_used_mb = hud_mem_total_mb = -1;
+        return;
+    }
+    hud_mem_total_mb = total_kb / 1024;
+    hud_mem_used_mb = (total_kb - avail_kb) / 1024;
+}
+
+/* Desenha a barra. O chamador cuida de salvar/restaurar o cursor. */
+static void hud_draw(void) {
+    if (!hud_enabled || anim_cols < 20) return;
+    int cols = anim_cols;
+
+    char path[PATH_MAX];
+    hud_path(path, sizeof(path));
+    char branch[128];
+    int dirty = 0;
+    hud_git(branch, sizeof(branch), &dirty);
+
+    char head[PATH_MAX + 160];
+    int hn = snprintf(head, sizeof(head), " %s", path);
+    if (branch[0] && hn > 0 && hn < (int)sizeof(head) - 4)
+        hn += snprintf(head + hn, sizeof(head) - hn, "  %s%s",
+                       branch, dirty ? "*" : "");
+
+    char stat[64] = "";
+    if (last_duration_ms >= 0) {
+        if (last_duration_ms < 1000) {
+            if (last_status == 0)
+                snprintf(stat, sizeof(stat), "ok %ldms", last_duration_ms);
+            else
+                snprintf(stat, sizeof(stat), "err %d %ldms",
+                         last_status, last_duration_ms);
+        } else {
+            double secs = (double)last_duration_ms / 1000.0;
+            if (last_status == 0)
+                snprintf(stat, sizeof(stat), "ok %.2fs", secs);
+            else
+                snprintf(stat, sizeof(stat), "err %d %.2fs", last_status, secs);
+        }
+    }
+
+    int running = 0;
+    for (int i = 0; i < njobs; i++)
+        if (jobs[i].running == 1) running++;
+
+    char pieces[6][64];
+    int np = 0;
+    if (running > 0)
+        snprintf(pieces[np++], sizeof(pieces[0]), "%d job%s",
+                 running, running == 1 ? "" : "s");
+    snprintf(pieces[np++], sizeof(pieces[0]), "%s",
+             current_lang == LANG_PT ? "PT" : "EN");
+    time_t t = time(NULL);
+    struct tm tm;
+    if (localtime_r(&t, &tm))
+        strftime(pieces[np++], sizeof(pieces[0]), "%H:%M", &tm);
+    if (hud_cpu_pct >= 0)
+        snprintf(pieces[np++], sizeof(pieces[0]), "cpu %d%%", hud_cpu_pct);
+    if (hud_mem_total_mb > 0)
+        snprintf(pieces[np++], sizeof(pieces[0]), "ram %.1fG",
+                 (double)hud_mem_used_mb / 1024.0);
+
+    /* Reserva no maximo metade da linha para o caminho/branch. */
+    int max_head = cols / 2;
+    if (max_head < 12) max_head = 12;
+    int hl0 = (int)strlen(head);
+    if (hl0 > max_head) {
+        char tmp[PATH_MAX + 160];
+        snprintf(tmp, sizeof(tmp), "...%s", head + hl0 - (max_head - 3));
+        snprintf(head, sizeof(head), "%s", tmp);
+    }
+
+    int left_len = (int)strlen(head) + (stat[0] ? (int)strlen(stat) + 1 : 0);
+    char right[512] = "";
+    int rn = 0;
+    for (int i = 0; i < np; i++) {
+        int plen = (int)strlen(pieces[i]);
+        int need = rn + (rn ? 2 : 0) + plen;
+        if (left_len + need + 2 > cols) break;
+        if (rn) { strcat(right, "  "); rn += 2; }
+        strcat(right, pieces[i]);
+        rn += plen;
+    }
+
+    /* Se ainda nao couber, encurta o caminho mantendo o final. */
+    if (left_len + 1 > cols) {
+        int keep = cols - 1 - (stat[0] ? (int)strlen(stat) + 1 : 0);
+        if (keep < 8) { stat[0] = '\0'; keep = cols - 1; }
+        int hl = (int)strlen(head);
+        if (keep > 0 && hl > keep) {
+            if (keep > 3) {
+                char tmp[PATH_MAX + 160];
+                snprintf(tmp, sizeof(tmp), "...%s", head + hl - (keep - 3));
+                snprintf(head, sizeof(head), "%s", tmp);
+            } else {
+                head[keep] = '\0';
+            }
+        }
+    }
+
+    int pad = cols - (int)strlen(head)
+                  - (stat[0] ? (int)strlen(stat) + 1 : 0) - rn;
+    if (pad < 0) pad = 0;
+
+    printf("\033[%d;1H\033[48;2;24;14;42m", hud_row);
+    printf(VOID_TEXT_COLOR "%s", head);
+    if (stat[0]) {
+        printf(" %s%s",
+               last_status == 0
+                   ? "\033[38;2;120;220;150m"
+                   : "\033[38;2;255;120;120m",
+               stat);
+    }
+    for (int i = 0; i < pad; i++) putchar(' ');
+    if (rn) printf("\033[38;2;140;125;175m%s", right);
+    printf("\033[0m");
+}
+
+static void hud_tick(void) {
+    if (!hud_enabled) return;
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    long long ms = (long long)now.tv_sec * 1000 + now.tv_nsec / 1000000;
+    if (!hud_force && ms - hud_last_ms < HUD_REFRESH_MS) return;
+    hud_force = 0;
+    hud_last_ms = ms;
+    hud_cpu_update();
+    hud_mem_update();
+    hud_draw();
 }
 
 static int lang_parse(const char *s) {
@@ -2150,7 +2481,8 @@ int main(void) {
                 anim_render_all();
             } else {
                 anim_enabled = 0;
-                printf("\033[r\033[%d;1H", anim_rows > 0 ? anim_rows : 24);
+                hud_enabled = 0;
+                printf("\033[r\033[%d;1H\033[K", anim_rows > 0 ? anim_rows : 24);
                 fflush(stdout);
             }
         }
@@ -2163,7 +2495,13 @@ int main(void) {
         }
         if (*input) {
             add_history(input);
+            struct timespec t0, t1;
+            clock_gettime(CLOCK_MONOTONIC, &t0);
             run_line(input);
+            clock_gettime(CLOCK_MONOTONIC, &t1);
+            last_duration_ms = (t1.tv_sec - t0.tv_sec) * 1000L +
+                               (t1.tv_nsec - t0.tv_nsec) / 1000000L;
+            hud_force = 1;
         }
         free(input);
     }
