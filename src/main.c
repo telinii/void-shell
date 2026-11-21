@@ -31,6 +31,7 @@ static void kalc_run(const char *start);
 static int lang_run(const char *start);
 static void lang_load(void);
 static const char *tr(const char *en, const char *pt);
+static void print_tutorial(void);
 
 static int last_status = 0;
 
@@ -775,6 +776,23 @@ static void run_line(char *line) {
             if (changed)
                 printf("%s\n", tr("Language set to English.",
                                   "Idioma definido para Português (Brasil)."));
+            last_status = 0;
+            return;
+        }
+    }
+    /* /tutorial (alias /help): mostra o guia de boas-vindas de novo */
+    {
+        char *s = line;
+        while (*s == ' ' || *s == '\t') s++;
+        int tut = 0;
+        if (strncmp(s, "/tutorial", 9) == 0 &&
+            (s[9] == '\0' || s[9] == ' ' || s[9] == '\t'))
+            tut = 1;
+        else if (strncmp(s, "/help", 5) == 0 &&
+                 (s[5] == '\0' || s[5] == ' ' || s[5] == '\t'))
+            tut = 1;
+        if (tut) {
+            print_tutorial();
             last_status = 0;
             return;
         }
@@ -1536,6 +1554,41 @@ static const KalcTopic kalc_topics[] = {
 #define KALC_SEL    "\033[48;2;70;40;120m\033[38;2;255;255;255m"
 #define KALC_RESET  "\033[0m"
 
+/* Guia rapido mostrado ao abrir o shell e pelo /tutorial. */
+static void print_tutorial(void) {
+    int color = isatty(STDOUT_FILENO);
+    int full = anim_logo_pinned || !color;
+    const char *C = color ? KALC_PURPLE : "";
+    const char *T = color ? KALC_TEXT : "";
+    const char *R = color ? KALC_RESET : "";
+
+    if (!full) {
+        printf("%s%s%s\n", T,
+               tr("/kalc math · /lang language · /tutorial help",
+                  "/kalc matemática · /lang idioma · /tutorial ajuda"),
+               R);
+        fflush(stdout);
+        return;
+    }
+
+    printf("%s%s%s\n", C,
+           tr("Welcome to void-shell! Quick guide:",
+              "Bem-vindo ao void-shell! Guia rápido:"), R);
+    printf("  %s/kalc%s      %s%s%s\n", C, R, T,
+           tr("interactive math manual", "manual interativo de matemática"), R);
+    printf("  %s/lang%s      %s%s%s\n", C, R, T,
+           tr("change language (EN / PT)", "troca o idioma (EN / PT)"), R);
+    printf("  %sclear%s      %s%s%s\n", C, R, T,
+           tr("clear the screen (Ctrl+L)", "limpa a tela (Ctrl+L)"), R);
+    printf("  %sexit%s       %s%s%s\n", C, R, T,
+           tr("leave the shell (Ctrl+D)", "sai do shell (Ctrl+D)"), R);
+    printf("  %s↑/↓%s        %s%s%s\n", C, R, T,
+           tr("history    Tab  completion", "histórico    Tab  completar"), R);
+    printf("  %s/tutorial%s  %s%s%s\n", C, R, T,
+           tr("show this guide again", "mostra este guia de novo"), R);
+    fflush(stdout);
+}
+
 static int kalc_rows = 24;
 static int kalc_cols = 80;
 
@@ -2083,6 +2136,7 @@ int main(void) {
 
     print_banner();
     anim_setup();
+    if (isatty(STDOUT_FILENO)) print_tutorial();
     rl_set_keyboard_input_timeout(80000);
     rl_event_hook = anim_tick;
     rl_add_defun("void-clear-screen", anim_clear_key, '\x0c');

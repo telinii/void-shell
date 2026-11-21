@@ -23,6 +23,8 @@ aprender sistemas operacionais e programação de baixo nível.
 - `/lang`: troca o idioma do shell entre **English** e
   **Português (Brasil)**; a escolha fica salva para as próximas sessões
   (padrão: English)
+- Guia rápido de boas-vindas ao abrir o shell; `/tutorial` (ou `/help`)
+  mostra o guia de novo
 
 ## Build
 
