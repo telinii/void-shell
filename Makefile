@@ -1,6 +1,6 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -std=c11 -Iinclude
-LDLIBS = -lreadline
+LDLIBS = -lreadline -lm
 TARGET = void-shell
 
 SRCS = $(wildcard src/*.c)

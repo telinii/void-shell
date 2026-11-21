@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 #include <string.h>
 #include <unistd.h>
 #include <sys/wait.h>
@@ -1063,19 +1064,19 @@ static void run_line(char *line) {
 static char histfile[4096];
 
 static const char *const galaxy_lines[13] = {
-    "                .  *  .  *  .  *  .  *",
-    "          .  *  .  *  .  *  .  *  .  *  .",
-    "      .  *  .  *  .  *  .  *  .  *  .  *  .",
-    "    .  *  .  *  .  *  .  *  .  *  .  *  .  *",
-    "  .  *  .  *  .  *  .  *  .  *  .  *  .  *  .",
-    " .  *  .  *  .  *  .  *  .  *  .  *  .  *  .  .",
-    ".  *  .  *  .  *  .  *  .  *  .  *  .  *  .  *  .",
-    " .  *  .  *  .  *  .  *  .  *  .  *  .  *  .  .",
-    "  .  *  .  *  .  *  .  *  .  *  .  *  .  *  .",
-    "    .  *  .  *  .  *  .  *  .  *  .  *  .  *",
-    "      .  *  .  *  .  *  .  *  .  *  .  *  .",
-    "          .  *  .  *  .  *  .  *  .  *  .",
-    "                .  *  .  *  .  *  .  *",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⣠⠤⠴⠒⠒⠋⠉⡉⠉⠉⠉⠉⢉⠉⠉⠉⠒⠒⠲⠤⣄⣀",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⡤⠖⠋⢁⠀⠀⠐⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠉⠓⠦⣄⡀",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣠⠞⠉⠃⠄⠀⠀⠀⠀⢀⣠⠤⠖⠒⠚⠉⠉⠉⠉⡉⠓⠒⠲⠤⣄⣀⠀⠀⠀⠀⠀⠀⠀⠙⠢⣄",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⣰⠃⠀⠀⠀⠀⠀⠀⣠⠞⠉⠀⠀⠀⠀⠀⠀⠀⠀⠀⠁⠀⠀⠀⠀⠀⠈⠙⠦⣄⠀⠀⠀⠈⠀⠀⠈⠳",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⡀⡇⠀⠀⠀⠀⠀⠀⢸⠁⠀⠀⠀⠀⠀⡤⣶⣋⠉⡉⠙⠒⠳⢤⡀⠀⠀⠀⠀⠀⠊⠳⡄⠀⠀⠀⠠",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⣇⠀⠀⠀⠀⠀⠀⠸⣅⠠⡀⠀⠈⠰⣿⣏⣩⣿⠆⠀⡀⡀⠀⠙⡆⠀⠀⢈⠀⠀⠂⢹⠀⠀⠐",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⡀⠘⢦⡀⠀⠀⠀⠀⠈⠈⠓⠦⠤⣆⣒⣀⣩⠽⠛⠀⠀⠀⠠⢀⢀⡇⠀⠀⠀⠀⠀⠀⢸",
+    "⠀⠀⠀⢦⡀⠀⠀⠀⠀⠀⠀⠙⠲⣄⡀⢀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠀⠀⠀⣀⡴⠋⠀⠀⠀⠀⠀⠀⢠⠏⠀⠐",
+    "⠀⠀⠀⠀⠙⠢⣄⠀⠀⠀⠀⠀⠀⠀⠉⠙⠒⡦⠤⢤⣀⣀⣈⣄⣀⡤⠤⠴⠒⠋⠁⠀⠀⠀⠀⠀⠀⣀⡴⠋",
+    "⠀⠀⠀⠀⠀⠀⠈⠙⠲⢤⣀⡀⠀⠀⢨⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠁⠀⠀⠀⠀⢀⣤⠶⠚⠁",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠉⠙⠒⠦⠤⠤⣀⣀⣀⣀⣀⣀⣀⣀⣠⣀⣠⠤⠤⢖⠒⠋⠍",
+    "",
 };
 
 static const char *const logo_lines[7] = {
@@ -1087,6 +1088,120 @@ static const char *const logo_lines[7] = {
     "     :MM;     YA.   ,A9   MM  `Mb    MM      Mb     dM   MM    MM  YM.    ,   MM    MM  ",
     "      VF       `Ybmd9'  .JMML. `Wbmd\"MML.    P\"Ybmmd\"  .JMML  JMML. `Mbmmd' .JMML..JMML.",
 };
+
+/* Galaxia em braille: desenho em pontos, gradiente radial pulsante.
+   As linhas tem caracteres UTF-8 (U+2800..U+28FF), entao contamos e
+   percorremos por code point, nao por byte. */
+#define GALAXY_ROWS 13
+#define GALAXY_COLS 50
+#define GALAXY_PI   3.14159265358979323846
+
+static int utf8_decode(const char *s, unsigned *cp) {
+    const unsigned char *p = (const unsigned char *)s;
+    if (p[0] < 0x80) { *cp = p[0]; return 1; }
+    if ((p[0] & 0xE0) == 0xC0) {
+        *cp = ((unsigned)(p[0] & 0x1F) << 6) | (p[1] & 0x3F);
+        return 2;
+    }
+    if ((p[0] & 0xF0) == 0xE0) {
+        *cp = ((unsigned)(p[0] & 0x0F) << 12) |
+              ((unsigned)(p[1] & 0x3F) << 6) | (p[2] & 0x3F);
+        return 3;
+    }
+    if ((p[0] & 0xF8) == 0xF0) {
+        *cp = ((unsigned)(p[0] & 0x07) << 18) |
+              ((unsigned)(p[1] & 0x3F) << 12) |
+              ((unsigned)(p[2] & 0x3F) << 6) | (p[3] & 0x3F);
+        return 4;
+    }
+    *cp = p[0];
+    return 1;
+}
+
+static int utf8_count(const char *s) {
+    int n = 0;
+    while (*s) {
+        unsigned cp;
+        s += utf8_decode(s, &cp);
+        n++;
+    }
+    return n;
+}
+
+static void galaxy_color(int col, int row, int ncols, int nrows,
+                         double phase, char *out, size_t n) {
+    double cx = (ncols - 1) / 2.0;
+    double cy = (nrows - 1) / 2.0;
+    double dx = col - cx;
+    double dy = (row - cy) * 2.0;
+    double maxr = sqrt(cx * cx + (cy * 2.0) * (cy * 2.0));
+    double d = maxr > 0.0 ? sqrt(dx * dx + dy * dy) / maxr : 0.0;
+    if (d > 1.0) d = 1.0;
+
+    /* Anel de brilho que caminha do centro para fora. */
+    double band = 0.5 + 0.5 * cos(2.0 * GALAXY_PI * (d * 2.2 - phase));
+    band = band * band * band * band;
+    double t = d * (1.0 - 0.55 * band);
+    if (t < 0.0) t = 0.0;
+    if (t > 0.85) t = 0.85;
+
+    double tt = t * 4.0;
+    int seg = (int)tt;
+    if (seg < 0) seg = 0;
+    if (seg > 3) seg = 3;
+    double f = tt - seg;
+    if (f < 0.0) f = 0.0;
+    if (f > 1.0) f = 1.0;
+
+    const int (*g)[3] = themes[current_theme].grad;
+    int r = (int)(g[seg][0] + (g[seg + 1][0] - g[seg][0]) * f);
+    int gg = (int)(g[seg][1] + (g[seg + 1][1] - g[seg][1]) * f);
+    int b = (int)(g[seg][2] + (g[seg + 1][2] - g[seg][2]) * f);
+    snprintf(out, n, "\033[38;2;%d;%d;%dm", r, gg, b);
+}
+
+static void galaxy_putc(const char *bytes, int nbytes, unsigned cp,
+                        int col, int row, double phase) {
+    if (cp == ' ' || cp == 0x2800) {
+        putchar(' ');
+        return;
+    }
+    char esc[32];
+    galaxy_color(col, row, GALAXY_COLS, GALAXY_ROWS, phase, esc, sizeof esc);
+    fputs(esc, stdout);
+    fwrite(bytes, 1, (size_t)nbytes, stdout);
+}
+
+/* Desenha a galaxia a partir de start_row, quebrando linhas se preciso. */
+static void galaxy_draw_block(int start_row, int cols, double phase) {
+    if (cols < 1) cols = 1;
+    int vrow = start_row;
+    for (int i = 0; i < GALAXY_ROWS; i++) {
+        int nchars = utf8_count(galaxy_lines[i]);
+        int r = (nchars + cols - 1) / cols;
+        if (r < 1) r = 1;
+        for (int k = 0; k < r; k++)
+            printf("\033[%d;1H\033[K", vrow + k);
+
+        const char *p = galaxy_lines[i];
+        int col = 0, chunk = 0, line_row = vrow;
+        printf("\033[%d;1H", line_row);
+        while (*p) {
+            unsigned cp;
+            int nbytes = utf8_decode(p, &cp);
+            if (chunk == cols) {
+                line_row++;
+                chunk = 0;
+                printf("\033[%d;1H", line_row);
+            }
+            galaxy_putc(p, nbytes, cp, col, i, phase);
+            p += nbytes;
+            col++;
+            chunk++;
+        }
+        vrow += r;
+    }
+}
 
 static void print_gradient_raw(const char *s, int offset) {
     int len = (int)strlen(s);
@@ -1152,6 +1267,7 @@ static int draw_block(const char *const *lines, int n, int start_row, int cols, 
 
 static int anim_enabled = 0;
 static int anim_offset = 0;
+static double galaxy_phase = 0.0;
 static int anim_rows = 24;
 static int anim_cols = 80;
 static int anim_logo_live = 0;    /* banner pode ser redesenhado agora? */
@@ -1194,13 +1310,9 @@ static int anim_poll_resize(void) {
     return 1;
 }
 
-/* Redesenha so as estrelas, sem tocar no banner nem na area do shell. */
-static void anim_draw_stars(int offset) {
-    for (int i = 0; i < 13; i++) {
-        printf("\033[%d;1H", i + 1);
-        print_gradient_raw(galaxy_lines[i], offset);
-        printf("\033[K");
-    }
+/* Redesenha so a galaxia, sem tocar no banner nem na area do shell. */
+static void anim_draw_stars(void) {
+    galaxy_draw_block(1, anim_cols, galaxy_phase);
     printf("\033[%d;1H\033[K", ANIM_HEADER_ROWS);
 }
 
@@ -1212,7 +1324,7 @@ static void anim_render_static(void) {
     anim_logo_pinned = 0;
     hud_enabled = 0;
     printf("\033[r\033[2J\033[H");
-    draw_block(galaxy_lines, 13, 1, cols, anim_offset);
+    galaxy_draw_block(1, cols, galaxy_phase);
     printf("\033[%d;1H\033[K", ANIM_HEADER_ROWS);
     int bh = block_height(logo_lines, 7, cols);
     int prompt_row = ANIM_HEADER_ROWS + 1;
@@ -1236,7 +1348,7 @@ static void anim_render_all(void) {
     printf("\033[?2026h"); /* synchronized output (kitty): sem flicker */
     printf("\033[r");
     printf("\033[2J\033[H");
-    draw_block(galaxy_lines, 13, 1, cols, anim_offset);
+    galaxy_draw_block(1, cols, galaxy_phase);
     printf("\033[%d;1H\033[K", ANIM_HEADER_ROWS);
 
     int hud = (cols >= HUD_MIN_COLS && rows >= HUD_MIN_ROWS);
@@ -1365,8 +1477,10 @@ static int anim_tick(void) {
     anim_last = now;
 
     anim_offset = (anim_offset + 3) % 4096;
+    galaxy_phase += 0.035;
+    if (galaxy_phase >= 1.0) galaxy_phase -= 1.0;
     printf("\033[?2026h\033[s");
-    anim_draw_stars(anim_offset);
+    anim_draw_stars();
     if (anim_logo_live) {
         draw_block(logo_lines, 7, ANIM_HEADER_ROWS + 1, anim_cols, anim_offset);
     }
@@ -1387,14 +1501,19 @@ static int anim_clear_key(int count, int key) {
 
 static void print_banner(void) {
     if (!isatty(STDOUT_FILENO)) return;
-    printf("\033[r");
+    anim_read_size();
+    /* Limpa a tela visivel e tambem o scrollback antes do splash. */
+    printf("\033[r\033[H\033[2J\033[3J\033[H");
+    fflush(stdout);
     for (int frame = 0; frame < 12; frame++) {
         printf("\033[2J\033[H");
         int off = frame * 3;
-        for (int i = 0; i < 13; i++) print_gradient(galaxy_lines[i], off);
-        printf("\n");
-        for (int i = 0; i < 7; i++) print_gradient(logo_lines[i], off);
-        printf("\n");
+        galaxy_draw_block(1, anim_cols, frame * 0.12);
+        printf("\033[%d;1H\033[K", ANIM_HEADER_ROWS);
+        for (int i = 0; i < 7; i++) {
+            printf("\033[%d;1H", ANIM_HEADER_ROWS + 1 + i);
+            print_gradient(logo_lines[i], off);
+        }
         fflush(stdout);
         struct timespec ts = {0, 80000000L};
         nanosleep(&ts, NULL);

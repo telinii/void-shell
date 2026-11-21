@@ -24,6 +24,7 @@ aprender sistemas operacionais e programação de baixo nível.
 - Globbing: `*`, `?`, `[...]`
 - Expansão de `~`
 - Galáxia e banner animados no topo (região de rolagem própria, sem conflitar com o readline)
+- Limpa a tela e o scrollback do terminal ao iniciar
 - `/kalc`: manual interativo de matemática básica (soma, subtração,
   multiplicação e divisão), com menu clicável e navegação por teclado
 - `/lang`: troca o idioma do shell entre **English** e
