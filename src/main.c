@@ -797,6 +797,16 @@ static void run_line(char *line) {
 
 static char histfile[4096];
 
+static void print_banner(void) {
+    if (!isatty(STDOUT_FILENO)) return;
+    printf("\033[1;36m");
+    printf("+------------------------------------------+\n");
+    printf("|            VOID-SHELL  v10               |\n");
+    printf("|        mini shell educacional em C       |\n");
+    printf("+------------------------------------------+\n");
+    printf("\033[0m\n");
+}
+
 static void save_history(void) {
     write_history(histfile);
 }
@@ -815,6 +825,8 @@ int main(void) {
         shell_pgid = getpid();
         tcsetpgrp(shell_terminal, shell_pgid);
     }
+
+    print_banner();
 
     for (;;) {
         char *input = readline("void-shell> ");
