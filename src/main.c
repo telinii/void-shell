@@ -1079,7 +1079,9 @@ static void anim_reapply_region(void) {
         return;
     }
     if (!anim_enabled) return;
-    printf("\033[%d;%dr", anim_region_top, anim_rows);
+    /* Salva o cursor: alguns terminais (kitty incluso) movem o cursor para o
+       topo da regiao ao aplicar DECSTBM. Sem isso o prompt volta pra cima. */
+    printf("\033[s\033[%d;%dr\033[u", anim_region_top, anim_rows);
     fflush(stdout);
 }
 
