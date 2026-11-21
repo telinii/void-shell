@@ -831,11 +831,13 @@ static void print_banner(void) {
     print_gradient("          .  *  .  *  .  *  .  *  .  *  .");
     print_gradient("                .  *  .  *  .  *  .  *");
     printf("\n");
-    print_gradient("#   #   ####  ####  ####         ####  #  #  ####  #     #   ");
-    print_gradient("#   #  #    #    #   #   #  ####  #      #  #  #     #     #   ");
-    print_gradient("#   #  #    #    #   #   #         ####  ####  ####  #     #   ");
-    print_gradient(" # #   #    #    #   #   #            #  #  #  #     #     #   ");
-    print_gradient("  #     ####  ####  ####        ####   #  #  ####  ####  ####");
+    print_gradient("#       #   #####   ####### ######              ######   #     # ####### #       #      ");
+    print_gradient("#       #  #     #     #    #     #            #         #     # #       #       #      ");
+    print_gradient(" #     #  #       #    #    #      #           #         #     # #       #       #      ");
+    print_gradient(" #     #  #       #    #    #      # #########  ######   ####### #####   #       #      ");
+    print_gradient("  #   #   #       #    #    #      #                  #  #     # #       #       #      ");
+    print_gradient("   # #     #     #     #    #     #                   #  #     # #       #       #      ");
+    print_gradient("    #       #####   ####### ######             ######    #     # ####### ####### #######");
     printf("\n");
 }
 
