@@ -69,6 +69,36 @@ static const Theme themes[] = {
         {70, 70, 80}, {20, 20, 24}, {150, 150, 160}, {220, 220, 220}, {255, 120, 120},
         {{255, 255, 255}, {200, 200, 210}, {120, 120, 130}, {70, 70, 80}, {15, 15, 18}},
     },
+    {
+        "ocean", "Ocean",
+        {70, 170, 240}, {160, 220, 255}, {100, 220, 240}, {110, 140, 170},
+        {20, 50, 80}, {8, 20, 35}, {100, 150, 180}, {110, 240, 200}, {255, 130, 120},
+        {{240, 250, 255}, {120, 220, 255}, {40, 130, 220}, {30, 70, 120}, {8, 18, 30}},
+    },
+    {
+        "sunset", "Sunset",
+        {255, 140, 60}, {255, 210, 150}, {255, 190, 90}, {170, 130, 110},
+        {90, 40, 20}, {30, 14, 10}, {190, 150, 120}, {160, 230, 140}, {255, 90, 90},
+        {{255, 250, 230}, {255, 200, 100}, {255, 120, 50}, {160, 50, 60}, {35, 12, 15}},
+    },
+    {
+        "dracula", "Dracula",
+        {189, 147, 249}, {248, 248, 242}, {255, 121, 198}, {130, 130, 160},
+        {68, 71, 90}, {40, 42, 54}, {160, 160, 180}, {80, 250, 123}, {255, 85, 85},
+        {{248, 248, 242}, {255, 121, 198}, {189, 147, 249}, {98, 114, 164}, {40, 42, 54}},
+    },
+    {
+        "nord", "Nord",
+        {136, 192, 208}, {216, 222, 233}, {129, 161, 193}, {120, 130, 150},
+        {59, 66, 82}, {46, 52, 64}, {143, 161, 179}, {163, 190, 140}, {191, 97, 106},
+        {{236, 239, 244}, {136, 192, 208}, {94, 129, 172}, {76, 86, 106}, {46, 52, 64}},
+    },
+    {
+        "amber", "Amber",
+        {255, 176, 0}, {255, 210, 100}, {255, 190, 60}, {170, 130, 60},
+        {70, 45, 10}, {24, 16, 4}, {180, 140, 70}, {200, 230, 100}, {255, 100, 80},
+        {{255, 250, 220}, {255, 190, 60}, {200, 120, 20}, {100, 60, 20}, {20, 12, 4}},
+    },
 };
 #define THEME_N ((int)(sizeof(themes) / sizeof(themes[0])))
 
@@ -150,6 +180,11 @@ static int theme_find(const char *s) {
     if (strcasecmp(s, "green") == 0) return 1;
     if (strcasecmp(s, "pink") == 0 || strcasecmp(s, "retro") == 0) return 2;
     if (strcasecmp(s, "gray") == 0 || strcasecmp(s, "grey") == 0) return 3;
+    if (strcasecmp(s, "blue") == 0 || strcasecmp(s, "sea") == 0) return 4;
+    if (strcasecmp(s, "orange") == 0 || strcasecmp(s, "warm") == 0) return 5;
+    if (strcasecmp(s, "drac") == 0) return 6;
+    if (strcasecmp(s, "nordic") == 0) return 7;
+    if (strcasecmp(s, "gold") == 0) return 8;
     return -1;
 }
 
@@ -1089,12 +1124,24 @@ static const char *const logo_lines[7] = {
     "      VF       `Ybmd9'  .JMML. `Wbmd\"MML.    P\"Ybmmd\"  .JMML  JMML. `Mbmmd' .JMML..JMML.",
 };
 
-/* Galaxia em braille: desenho em pontos, gradiente radial pulsante.
-   As linhas tem caracteres UTF-8 (U+2800..U+28FF), entao contamos e
-   percorremos por code point, nao por byte. */
+/* Galaxia em braille: desenho em pontos, gradiente radial pulsante e
+   rotacao lenta no plano do disco. As linhas sao UTF-8 (U+2800..U+28FF),
+   entao decodificamos por code point. */
 #define GALAXY_ROWS 13
 #define GALAXY_COLS 50
+#define GALAXY_DOTS_W (GALAXY_COLS * 2)
+#define GALAXY_DOTS_H (GALAXY_ROWS * 4)
+#define GALAXY_TILT 0.55
 #define GALAXY_PI   3.14159265358979323846
+
+static unsigned char galaxy_dots[GALAXY_DOTS_H][GALAXY_DOTS_W];
+static int galaxy_dots_ready = 0;
+
+static const unsigned char braille_bit[8] = {
+    0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80
+};
+static const int braille_dx[8] = {0, 0, 0, 1, 1, 1, 0, 1};
+static const int braille_dy[8] = {0, 1, 2, 0, 1, 2, 3, 3};
 
 static int utf8_decode(const char *s, unsigned *cp) {
     const unsigned char *p = (const unsigned char *)s;
@@ -1118,14 +1165,30 @@ static int utf8_decode(const char *s, unsigned *cp) {
     return 1;
 }
 
-static int utf8_count(const char *s) {
-    int n = 0;
-    while (*s) {
-        unsigned cp;
-        s += utf8_decode(s, &cp);
-        n++;
+/* Decodifica o desenho braille para uma matriz de pontos. */
+static void galaxy_init_dots(void) {
+    memset(galaxy_dots, 0, sizeof(galaxy_dots));
+    for (int row = 0; row < GALAXY_ROWS; row++) {
+        const char *p = galaxy_lines[row];
+        int col = 0;
+        while (*p && col < GALAXY_COLS) {
+            unsigned cp;
+            p += utf8_decode(p, &cp);
+            if (cp >= 0x2800 && cp <= 0x28FF) {
+                unsigned mask = cp - 0x2800;
+                for (int b = 0; b < 8; b++) {
+                    if (mask & braille_bit[b]) {
+                        int x = col * 2 + braille_dx[b];
+                        int y = row * 4 + braille_dy[b];
+                        if (x < GALAXY_DOTS_W && y < GALAXY_DOTS_H)
+                            galaxy_dots[y][x] = 1;
+                    }
+                }
+            }
+            col++;
+        }
     }
-    return n;
+    galaxy_dots_ready = 1;
 }
 
 static void galaxy_color(int col, int row, int ncols, int nrows,
@@ -1160,44 +1223,85 @@ static void galaxy_color(int col, int row, int ncols, int nrows,
     snprintf(out, n, "\033[38;2;%d;%d;%dm", r, gg, b);
 }
 
-static void galaxy_putc(const char *bytes, int nbytes, unsigned cp,
-                        int col, int row, double phase) {
-    if (cp == ' ' || cp == 0x2800) {
-        putchar(' ');
-        return;
+/* Amostra bilinear do desenho de pontos, para a rotacao nao picotar. */
+static double galaxy_sample(double sx, double sy) {
+    int x0 = (int)floor(sx);
+    int y0 = (int)floor(sy);
+    double fx = sx - x0;
+    double fy = sy - y0;
+    double v = 0.0;
+    for (int oy = 0; oy <= 1; oy++) {
+        double wy = oy ? fy : (1.0 - fy);
+        for (int ox = 0; ox <= 1; ox++) {
+            double wx = ox ? fx : (1.0 - fx);
+            int x = x0 + ox, y = y0 + oy;
+            if (x >= 0 && x < GALAXY_DOTS_W &&
+                y >= 0 && y < GALAXY_DOTS_H &&
+                galaxy_dots[y][x])
+                v += wx * wy;
+        }
     }
-    char esc[32];
-    galaxy_color(col, row, GALAXY_COLS, GALAXY_ROWS, phase, esc, sizeof esc);
-    fputs(esc, stdout);
-    fwrite(bytes, 1, (size_t)nbytes, stdout);
+    return v;
+}
+
+/* Monta a mascara braille de uma celula girando o desenho no plano do
+   disco: desfaz a inclinacao, gira e aplica a inclinacao de volta. */
+static unsigned galaxy_cell_mask(int col, int row, double ca, double sa) {
+    double cx = (GALAXY_DOTS_W - 1) / 2.0;
+    double cy = (GALAXY_DOTS_H - 1) / 2.0;
+    unsigned mask = 0;
+    for (int b = 0; b < 8; b++) {
+        double x = col * 2 + braille_dx[b];
+        double y = row * 4 + braille_dy[b];
+        double dx = x - cx;
+        double dy = (y - cy) / GALAXY_TILT;
+        double rx = dx * ca + dy * sa;
+        double ry = -dx * sa + dy * ca;
+        double sx = cx + rx;
+        double sy = cy + ry * GALAXY_TILT;
+        if (galaxy_sample(sx, sy) > 0.25)
+            mask |= braille_bit[b];
+    }
+    return mask;
+}
+
+static void galaxy_put_braille(unsigned mask) {
+    unsigned cp = 0x2800 + mask;
+    putchar(0xE0 | (cp >> 12));
+    putchar(0x80 | ((cp >> 6) & 0x3F));
+    putchar(0x80 | (cp & 0x3F));
 }
 
 /* Desenha a galaxia a partir de start_row, quebrando linhas se preciso. */
-static void galaxy_draw_block(int start_row, int cols, double phase) {
+static void galaxy_draw_block(int start_row, int cols, double phase,
+                              double angle) {
+    if (!galaxy_dots_ready) galaxy_init_dots();
     if (cols < 1) cols = 1;
+    double ca = cos(angle), sa = sin(angle);
     int vrow = start_row;
-    for (int i = 0; i < GALAXY_ROWS; i++) {
-        int nchars = utf8_count(galaxy_lines[i]);
-        int r = (nchars + cols - 1) / cols;
+    for (int row = 0; row < GALAXY_ROWS; row++) {
+        int r = (GALAXY_COLS + cols - 1) / cols;
         if (r < 1) r = 1;
         for (int k = 0; k < r; k++)
             printf("\033[%d;1H\033[K", vrow + k);
 
-        const char *p = galaxy_lines[i];
-        int col = 0, chunk = 0, line_row = vrow;
+        int line_row = vrow;
         printf("\033[%d;1H", line_row);
-        while (*p) {
-            unsigned cp;
-            int nbytes = utf8_decode(p, &cp);
-            if (chunk == cols) {
+        for (int col = 0; col < GALAXY_COLS; col++) {
+            if (col > 0 && col % cols == 0) {
                 line_row++;
-                chunk = 0;
                 printf("\033[%d;1H", line_row);
             }
-            galaxy_putc(p, nbytes, cp, col, i, phase);
-            p += nbytes;
-            col++;
-            chunk++;
+            unsigned mask = galaxy_cell_mask(col, row, ca, sa);
+            if (mask == 0) {
+                putchar(' ');
+            } else {
+                char esc[32];
+                galaxy_color(col, row, GALAXY_COLS, GALAXY_ROWS,
+                             phase, esc, sizeof esc);
+                fputs(esc, stdout);
+                galaxy_put_braille(mask);
+            }
         }
         vrow += r;
     }
@@ -1268,6 +1372,7 @@ static int draw_block(const char *const *lines, int n, int start_row, int cols, 
 static int anim_enabled = 0;
 static int anim_offset = 0;
 static double galaxy_phase = 0.0;
+static double galaxy_angle = 0.0;
 static int anim_rows = 24;
 static int anim_cols = 80;
 static int anim_logo_live = 0;    /* banner pode ser redesenhado agora? */
@@ -1312,7 +1417,7 @@ static int anim_poll_resize(void) {
 
 /* Redesenha so a galaxia, sem tocar no banner nem na area do shell. */
 static void anim_draw_stars(void) {
-    galaxy_draw_block(1, anim_cols, galaxy_phase);
+    galaxy_draw_block(1, anim_cols, galaxy_phase, galaxy_angle);
     printf("\033[%d;1H\033[K", ANIM_HEADER_ROWS);
 }
 
@@ -1324,7 +1429,7 @@ static void anim_render_static(void) {
     anim_logo_pinned = 0;
     hud_enabled = 0;
     printf("\033[r\033[2J\033[H");
-    galaxy_draw_block(1, cols, galaxy_phase);
+    galaxy_draw_block(1, cols, galaxy_phase, galaxy_angle);
     printf("\033[%d;1H\033[K", ANIM_HEADER_ROWS);
     int bh = block_height(logo_lines, 7, cols);
     int prompt_row = ANIM_HEADER_ROWS + 1;
@@ -1348,7 +1453,7 @@ static void anim_render_all(void) {
     printf("\033[?2026h"); /* synchronized output (kitty): sem flicker */
     printf("\033[r");
     printf("\033[2J\033[H");
-    galaxy_draw_block(1, cols, galaxy_phase);
+    galaxy_draw_block(1, cols, galaxy_phase, galaxy_angle);
     printf("\033[%d;1H\033[K", ANIM_HEADER_ROWS);
 
     int hud = (cols >= HUD_MIN_COLS && rows >= HUD_MIN_ROWS);
@@ -1479,6 +1584,8 @@ static int anim_tick(void) {
     anim_offset = (anim_offset + 3) % 4096;
     galaxy_phase += 0.035;
     if (galaxy_phase >= 1.0) galaxy_phase -= 1.0;
+    galaxy_angle += 0.015;
+    if (galaxy_angle >= 2.0 * GALAXY_PI) galaxy_angle -= 2.0 * GALAXY_PI;
     printf("\033[?2026h\033[s");
     anim_draw_stars();
     if (anim_logo_live) {
@@ -1508,7 +1615,8 @@ static void print_banner(void) {
     for (int frame = 0; frame < 12; frame++) {
         printf("\033[2J\033[H");
         int off = frame * 3;
-        galaxy_draw_block(1, anim_cols, frame * 0.12);
+        galaxy_draw_block(1, anim_cols, frame * 0.12,
+                          galaxy_angle + frame * 0.015);
         printf("\033[%d;1H\033[K", ANIM_HEADER_ROWS);
         for (int i = 0; i < 7; i++) {
             printf("\033[%d;1H", ANIM_HEADER_ROWS + 1 + i);
@@ -1518,6 +1626,8 @@ static void print_banner(void) {
         struct timespec ts = {0, 80000000L};
         nanosleep(&ts, NULL);
     }
+    galaxy_angle += 12 * 0.015;
+    if (galaxy_angle >= 2.0 * GALAXY_PI) galaxy_angle -= 2.0 * GALAXY_PI;
 }
 
 /* ================================================================== */
@@ -2818,8 +2928,8 @@ static int theme_run(const char *start) {
         for (int i = 0; i < THEME_N; i++)
             printf("  [%d] %s%s\n", i + 1, themes[i].name,
                    i == current_theme ? tr("  (current)", "  (atual)") : "");
-        printf("%s\n", tr("Use /theme galaxy, /theme matrix, /theme synthwave or /theme mono.",
-                          "Use /theme galaxy, /theme matrix, /theme synthwave ou /theme mono."));
+        printf("%s\n", tr("Use /theme <name>: galaxy, matrix, synthwave, mono, ocean, sunset, dracula, nord, amber.",
+                          "Use /theme <nome>: galaxy, matrix, synthwave, mono, ocean, sunset, dracula, nord, amber."));
         return 0;
     }
 

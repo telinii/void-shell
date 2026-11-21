@@ -23,7 +23,7 @@ aprender sistemas operacionais e programação de baixo nível.
   `main.c`); **→** aceita a sugestão
 - Globbing: `*`, `?`, `[...]`
 - Expansão de `~`
-- Galáxia e banner animados no topo (região de rolagem própria, sem conflitar com o readline)
+- Galáxia em espiral com rotação lenta e banner animados no topo (região de rolagem própria, sem conflitar com o readline)
 - Limpa a tela e o scrollback do terminal ao iniciar
 - `/kalc`: manual interativo de matemática básica (soma, subtração,
   multiplicação e divisão), com menu clicável e navegação por teclado
@@ -32,7 +32,8 @@ aprender sistemas operacionais e programação de baixo nível.
   (padrão: English)
 - Guia rápido de boas-vindas ao abrir o shell; `/tutorial` (ou `/help`)
   mostra o guia de novo
-- `/theme`: temas de cores (**Galaxy**, **Matrix**, **Synthwave**, **Mono**)
+- `/theme`: temas de cores (**Galaxy**, **Matrix**, **Synthwave**, **Mono**,
+  **Ocean**, **Sunset**, **Dracula**, **Nord**, **Amber**)
   com preview no menu; a escolha fica salva para as próximas sessões
 - `Ctrl+P`: command palette com busca fuzzy em builtins, `/comandos`,
   histórico e executáveis do `PATH`; **Enter** executa, **Tab** edita no
