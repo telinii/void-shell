@@ -12,10 +12,13 @@
 #include <signal.h>
 #include <glob.h>
 #include <time.h>
+#include <sys/ioctl.h>
 
 #define MAX_ARGS 64
 #define MAX_CMDS 16
 #define MAX_TOKEN 4096
+
+static void anim_clear_screen(void);
 
 static int last_status = 0;
 
@@ -202,6 +205,11 @@ static int tokenize(char *line, char **argv) {
 static int do_builtin(char **argv) {
     if (strcmp(argv[0], "exit") == 0) {
         exit(0);
+    }
+    if (strcmp(argv[0], "clear") == 0) {
+        anim_clear_screen();
+        last_status = 0;
+        return 1;
     }
     if (strcmp(argv[0], "cd") == 0) {
         const char *dir = argv[1] ? argv[1] : getenv("HOME");
@@ -798,8 +806,34 @@ static void run_line(char *line) {
 
 static char histfile[4096];
 
-static void print_gradient(const char *s, int offset) {
-    int len = strlen(s);
+static const char *const galaxy_lines[13] = {
+    "                .  *  .  *  .  *  .  *",
+    "          .  *  .  *  .  *  .  *  .  *  .",
+    "      .  *  .  *  .  *  .  *  .  *  .  *  .",
+    "    .  *  .  *  .  *  .  *  .  *  .  *  .  *",
+    "  .  *  .  *  .  *  .  *  .  *  .  *  .  *  .",
+    " .  *  .  *  .  *  .  *  .  *  .  *  .  *  .  .",
+    ".  *  .  *  .  *  .  *  .  *  .  *  .  *  .  *  .",
+    " .  *  .  *  .  *  .  *  .  *  .  *  .  *  .  .",
+    "  .  *  .  *  .  *  .  *  .  *  .  *  .  *  .",
+    "    .  *  .  *  .  *  .  *  .  *  .  *  .  *",
+    "      .  *  .  *  .  *  .  *  .  *  .  *  .",
+    "          .  *  .  *  .  *  .  *  .  *  .",
+    "                .  *  .  *  .  *  .  *",
+};
+
+static const char *const logo_lines[7] = {
+    ":::     :::  ::::::::  ::::::::::: :::::::::                   ::::::::  :::    ::: :::::::::: :::        :::        ",
+    ":+:     :+: :+:    :+:     :+:     :+:    :+:                 :+:    :+: :+:    :+: :+:        :+:        :+:        ",
+    "+:+     +:+ +:+    +:+     +:+     +:+    +:+                 +:+        +:+    +:+ +:+        +:+        +:+        ",
+    "+#+     +:+ +#+    +:+     +#+     +#+    +:+  +#++:++#++:++  +#++:++#++ +#++:++#++ +#++:++#   +#+        +#+        ",
+    " +#+   +#+  +#+    +#+     +#+     +#+    +#+                        +#+ +#+    +#+ +#+        +#+        +#+        ",
+    "  #+#+#+#   #+#    #+#     #+#     #+#    #+#                 #+#    #+# #+#    #+# #+#        #+#        #+#        ",
+    "    ###      ########  ########### #########                   ########  ###    ### ########## ########## ##########  ",
+};
+
+static void print_gradient_raw(const char *s, int offset) {
+    int len = (int)strlen(s);
     for (int i = 0; i < len; i++) {
         int pos = (i + offset) % (len > 0 ? len : 1);
         int seg = (len > 1) ? (pos * 5 / len) : 0;
@@ -813,64 +847,229 @@ static void print_gradient(const char *s, int offset) {
         }
         printf("\033[38;2;%d;%d;%dm%c", r, g, b, s[i]);
     }
-    printf("\033[0m\n");
+    printf("\033[0m");
+}
+
+static void print_gradient(const char *s, int offset) {
+    print_gradient_raw(s, offset);
+    printf("\n");
+}
+
+/* Quantas linhas de terminal um bloco ocupa, contando quebra de linha. */
+static int block_height(const char *const *lines, int n, int cols) {
+    if (cols < 1) cols = 1;
+    int h = 0;
+    for (int i = 0; i < n; i++) {
+        int len = (int)strlen(lines[i]);
+        int r = (len + cols - 1) / cols;
+        if (r < 1) r = 1;
+        h += r;
+    }
+    return h;
+}
+
+/* Desenha um bloco em linha absoluta, limpando antes as linhas que ele usa. */
+static int draw_block(const char *const *lines, int n, int start_row, int cols, int offset) {
+    if (cols < 1) cols = 1;
+    int row = start_row;
+    for (int i = 0; i < n; i++) {
+        int len = (int)strlen(lines[i]);
+        int r = (len + cols - 1) / cols;
+        if (r < 1) r = 1;
+        for (int k = 0; k < r; k++) {
+            printf("\033[%d;1H\033[K", row + k);
+        }
+        printf("\033[%d;1H", row);
+        print_gradient_raw(lines[i], offset);
+        row += r;
+    }
+    return row;
+}
+
+/* ------------------------------------------------------------------ */
+/* Animacao continua da galaxia                                        */
+/* ------------------------------------------------------------------ */
+
+#define ANIM_HEADER_ROWS 14   /* 13 linhas de estrelas + 1 linha em branco */
+#define ANIM_MIN_COLS    50
+#define ANIM_MIN_ROWS    16
+#define ANIM_FRAME_MS    80
+
+static int anim_enabled = 0;
+static int anim_offset = 0;
+static int anim_rows = 24;
+static int anim_cols = 80;
+static struct timespec anim_last;
+
+static void anim_read_size(void) {
+    struct winsize ws;
+    anim_rows = 24;
+    anim_cols = 80;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0) {
+        if (ws.ws_row > 0) anim_rows = ws.ws_row;
+        if (ws.ws_col > 0) anim_cols = ws.ws_col;
+    }
+}
+
+static int anim_poll_resize(void) {
+    struct winsize ws;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) != 0) return 0;
+    if (ws.ws_row == anim_rows && ws.ws_col == anim_cols) return 0;
+    if (ws.ws_row > 0) anim_rows = ws.ws_row;
+    if (ws.ws_col > 0) anim_cols = ws.ws_col;
+    return 1;
+}
+
+/* Redesenha so as estrelas, sem tocar no banner nem na area do shell. */
+static void anim_draw_stars(int offset) {
+    for (int i = 0; i < 13; i++) {
+        printf("\033[%d;1H", i + 1);
+        print_gradient_raw(galaxy_lines[i], offset);
+        printf("\033[K");
+    }
+    printf("\033[%d;1H\033[K", ANIM_HEADER_ROWS);
+}
+
+/* Render estatico: sem regiao de rolagem e sem animacao. */
+static void anim_render_static(void) {
+    int rows = anim_rows, cols = anim_cols;
+    printf("\033[r\033[2J\033[H");
+    draw_block(galaxy_lines, 13, 1, cols, anim_offset);
+    printf("\033[%d;1H\033[K", ANIM_HEADER_ROWS);
+    int bh = block_height(logo_lines, 7, cols);
+    int prompt_row = ANIM_HEADER_ROWS + 1;
+    if (ANIM_HEADER_ROWS + 1 + bh <= rows) {
+        draw_block(logo_lines, 7, ANIM_HEADER_ROWS + 1, cols, anim_offset);
+        prompt_row = ANIM_HEADER_ROWS + 1 + bh;
+    }
+    if (prompt_row > rows) prompt_row = rows;
+    printf("\033[%d;1H", prompt_row);
+    fflush(stdout);
+}
+
+/* Render completo: galaxia fixa no topo + banner + regiao de rolagem. */
+static void anim_render_all(void) {
+    int rows = anim_rows, cols = anim_cols;
+    int banner_top = ANIM_HEADER_ROWS + 1;
+    int bh = block_height(logo_lines, 7, cols);
+    int banner_end = banner_top + bh;
+
+    printf("\033[?2026h"); /* synchronized output (kitty): sem flicker */
+    printf("\033[r");
+    printf("\033[2J\033[H");
+    draw_block(galaxy_lines, 13, 1, cols, anim_offset);
+    printf("\033[%d;1H\033[K", ANIM_HEADER_ROWS);
+
+    int region_top, prompt_row;
+    if (banner_end <= rows) {
+        draw_block(logo_lines, 7, banner_top, cols, anim_offset);
+        prompt_row = banner_end;
+        if (rows >= banner_end + 8) {
+            region_top = banner_end;   /* terminal alto: banner fica fixo */
+        } else {
+            region_top = banner_top;   /* terminal curto: banner rola junto */
+        }
+    } else {
+        prompt_row = banner_top;
+        region_top = banner_top;
+    }
+
+    if (region_top > rows - 1) region_top = rows - 1;
+    if (region_top < 2) region_top = 2;
+    if (prompt_row < region_top) prompt_row = region_top;
+    if (prompt_row > rows) prompt_row = rows;
+
+    printf("\033[%d;%dr", region_top, rows);
+    printf("\033[%d;1H", prompt_row);
+    printf("\033[?2026l");
+    fflush(stdout);
+}
+
+static void anim_setup(void) {
+    if (!isatty(STDOUT_FILENO)) return;
+    anim_read_size();
+    if (anim_cols < ANIM_MIN_COLS || anim_rows < ANIM_MIN_ROWS) {
+        anim_enabled = 0;
+        anim_render_static();
+        return;
+    }
+    anim_enabled = 1;
+    anim_render_all();
+}
+
+static void anim_clear_screen(void) {
+    if (!isatty(STDOUT_FILENO)) return;
+    anim_read_size();
+    anim_enabled = (anim_cols >= ANIM_MIN_COLS && anim_rows >= ANIM_MIN_ROWS);
+    if (anim_enabled) anim_render_all();
+    else anim_render_static();
+}
+
+static void anim_cleanup(void) {
+    if (!isatty(STDOUT_FILENO)) return;
+    printf("\033[?2026l\033[r");
+    if (anim_rows > 0) printf("\033[%d;1H", anim_rows);
+    printf("\033[0m");
+    fflush(stdout);
+}
+
+/* Chamado pelo readline enquanto ele espera entrada. */
+static int anim_tick(void) {
+    if (anim_poll_resize()) {
+        int ok = (anim_cols >= ANIM_MIN_COLS && anim_rows >= ANIM_MIN_ROWS);
+        if (ok) {
+            anim_enabled = 1;
+            anim_render_all();
+        } else {
+            anim_enabled = 0;
+            printf("\033[r\033[%d;1H", anim_rows > 0 ? anim_rows : 24);
+            fflush(stdout);
+        }
+        rl_on_new_line();
+        rl_redisplay();
+        return 0;
+    }
+    if (!anim_enabled) return 0;
+    if (rl_pending_input) return 0;
+
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    long ms = (now.tv_sec - anim_last.tv_sec) * 1000L +
+              (now.tv_nsec - anim_last.tv_nsec) / 1000000L;
+    if (ms < ANIM_FRAME_MS) return 0;
+    anim_last = now;
+
+    anim_offset = (anim_offset + 3) % 4096;
+    printf("\033[?2026h\033[s");
+    anim_draw_stars(anim_offset);
+    printf("\033[u\033[?2026l");
+    fflush(stdout);
+    return 0;
+}
+
+/* Ctrl+L do readline: limpa e redesenha o cabecalho sem perder a regiao. */
+static int anim_clear_key(int count, int key) {
+    (void)count; (void)key;
+    anim_clear_screen();
+    rl_on_new_line();
+    rl_redisplay();
+    return 0;
 }
 
 static void print_banner(void) {
     if (!isatty(STDOUT_FILENO)) return;
+    printf("\033[r");
     for (int frame = 0; frame < 12; frame++) {
         printf("\033[2J\033[H");
         int off = frame * 3;
-        print_gradient("                .  *  .  *  .  *  .  *", off);
-        print_gradient("          .  *  .  *  .  *  .  *  .  *  .", off);
-        print_gradient("      .  *  .  *  .  *  .  *  .  *  .  *  .", off);
-        print_gradient("    .  *  .  *  .  *  .  *  .  *  .  *  .  *", off);
-        print_gradient("  .  *  .  *  .  *  .  *  .  *  .  *  .  *  .", off);
-        print_gradient(" .  *  .  *  .  *  .  *  .  *  .  *  .  *  .  .", off);
-        print_gradient(".  *  .  *  .  *  .  *  .  *  .  *  .  *  .  *  .", off);
-        print_gradient(" .  *  .  *  .  *  .  *  .  *  .  *  .  *  .  .", off);
-        print_gradient("  .  *  .  *  .  *  .  *  .  *  .  *  .  *  .", off);
-        print_gradient("    .  *  .  *  .  *  .  *  .  *  .  *  .  *", off);
-        print_gradient("      .  *  .  *  .  *  .  *  .  *  .  *  .", off);
-        print_gradient("          .  *  .  *  .  *  .  *  .  *  .", off);
-        print_gradient("                .  *  .  *  .  *  .  *", off);
+        for (int i = 0; i < 13; i++) print_gradient(galaxy_lines[i], off);
         printf("\n");
-        print_gradient(":::     :::  ::::::::  ::::::::::: :::::::::                   ::::::::  :::    ::: :::::::::: :::        :::        ", off);
-        print_gradient(":+:     :+: :+:    :+:     :+:     :+:    :+:                 :+:    :+: :+:    :+: :+:        :+:        :+:        ", off);
-        print_gradient("+:+     +:+ +:+    +:+     +:+     +:+    +:+                 +:+        +:+    +:+ +:+        +:+        +:+        ", off);
-        print_gradient("+#+     +:+ +#+    +:+     +#+     +#+    +:+  +#++:++#++:++  +#++:++#++ +#++:++#++ +#++:++#   +#+        +#+        ", off);
-        print_gradient(" +#+   +#+  +#+    +#+     +#+     +#+    +#+                        +#+ +#+    +#+ +#+        +#+        +#+        ", off);
-        print_gradient("  #+#+#+#   #+#    #+#     #+#     #+#    #+#                 #+#    #+# #+#    #+# #+#        #+#        #+#        ", off);
-        print_gradient("    ###      ########  ########### #########                   ########  ###    ### ########## ########## ##########  ", off);
+        for (int i = 0; i < 7; i++) print_gradient(logo_lines[i], off);
         printf("\n");
         fflush(stdout);
         struct timespec ts = {0, 80000000L};
         nanosleep(&ts, NULL);
     }
-    /* final static frame */
-    printf("\033[2J\033[H");
-    print_gradient("                .  *  .  *  .  *  .  *", 0);
-    print_gradient("          .  *  .  *  .  *  .  *  .  *  .", 0);
-    print_gradient("      .  *  .  *  .  *  .  *  .  *  .  *  .", 0);
-    print_gradient("    .  *  .  *  .  *  .  *  .  *  .  *  .  *", 0);
-    print_gradient("  .  *  .  *  .  *  .  *  .  *  .  *  .  *  .", 0);
-    print_gradient(" .  *  .  *  .  *  .  *  .  *  .  *  .  *  .  .", 0);
-    print_gradient(".  *  .  *  .  *  .  *  .  *  .  *  .  *  .  *  .", 0);
-    print_gradient(" .  *  .  *  .  *  .  *  .  *  .  *  .  *  .  .", 0);
-    print_gradient("  .  *  .  *  .  *  .  *  .  *  .  *  .  *  .", 0);
-    print_gradient("    .  *  .  *  .  *  .  *  .  *  .  *  .  *", 0);
-    print_gradient("      .  *  .  *  .  *  .  *  .  *  .  *  .", 0);
-    print_gradient("          .  *  .  *  .  *  .  *  .  *  .", 0);
-    print_gradient("                .  *  .  *  .  *  .  *", 0);
-    printf("\n");
-    print_gradient(":::     :::  ::::::::  ::::::::::: :::::::::                   ::::::::  :::    ::: :::::::::: :::        :::        ", 0);
-    print_gradient(":+:     :+: :+:    :+:     :+:     :+:    :+:                 :+:    :+: :+:    :+: :+:        :+:        :+:        ", 0);
-    print_gradient("+:+     +:+ +:+    +:+     +:+     +:+    +:+                 +:+        +:+    +:+ +:+        +:+        +:+        ", 0);
-    print_gradient("+#+     +:+ +#+    +:+     +#+     +#+    +:+  +#++:++#++:++  +#++:++#++ +#++:++#++ +#++:++#   +#+        +#+        ", 0);
-    print_gradient(" +#+   +#+  +#+    +#+     +#+     +#+    +#+                        +#+ +#+    +#+ +#+        +#+        +#+        ", 0);
-    print_gradient("  #+#+#+#   #+#    #+#     #+#     #+#    #+#                 #+#    #+# #+#    #+# #+#        #+#        #+#        ", 0);
-    print_gradient("    ###      ########  ########### #########                   ########  ###    ### ########## ########## ##########  ", 0);
-    printf("\n");
 }
 
 static void save_history(void) {
@@ -893,8 +1092,24 @@ int main(void) {
     }
 
     print_banner();
+    anim_setup();
+    rl_set_keyboard_input_timeout(80000);
+    rl_event_hook = anim_tick;
+    rl_add_defun("void-clear-screen", anim_clear_key, '\x0c');
+    atexit(anim_cleanup);
 
     for (;;) {
+        if (anim_poll_resize()) {
+            int ok = (anim_cols >= ANIM_MIN_COLS && anim_rows >= ANIM_MIN_ROWS);
+            if (ok) {
+                anim_enabled = 1;
+                anim_render_all();
+            } else {
+                anim_enabled = 0;
+                printf("\033[r\033[%d;1H", anim_rows > 0 ? anim_rows : 24);
+                fflush(stdout);
+            }
+        }
         char *input = readline("\001\033[38;2;140;90;220m\002void-shell> \001\033[0m\002");
         if (!input) { /* EOF (Ctrl+D) */
             printf("\n");

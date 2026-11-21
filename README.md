@@ -6,7 +6,7 @@ aprender sistemas operacionais e programação de baixo nível.
 ## Funcionalidades
 
 - REPL com prompt `void-shell>`
-- Builtins: `cd`, `pwd`, `exit`, `echo`, `jobs`, `fg`
+- Builtins: `cd`, `pwd`, `exit`, `echo`, `clear`, `jobs`, `fg`
 - Execução de comandos externos (`fork`/`execvp`/`waitpid`)
 - Redireções: `>`, `>>`, `<`
 - Pipes: `|`
@@ -17,6 +17,7 @@ aprender sistemas operacionais e programação de baixo nível.
 - Histórico persistente com setas e Tab (readline)
 - Globbing: `*`, `?`, `[...]`
 - Expansão de `~`
+- Galáxia animada no topo (região de rolagem própria, sem conflitar com o readline)
 
 ## Build
 
