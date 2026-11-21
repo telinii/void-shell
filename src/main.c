@@ -2090,7 +2090,8 @@ static void print_tutorial(void) {
     printf("  %s↑/↓%s        %s%s%s\n", C, R, T,
            tr("history    Tab  completion", "histórico    Tab  completar"), R);
     printf("  %s→%s          %s%s%s\n", C, R, T,
-           tr("accept the gray suggestion", "aceita a sugestão cinza"), R);
+           tr("accept the gray suggestion (commands, paths)",
+              "aceita a sugestão cinza (comandos, caminhos)"), R);
     printf("  %s/tutorial%s  %s%s%s\n", C, R, T,
            tr("show this guide again", "mostra este guia de novo"), R);
     fflush(stdout);
@@ -3188,6 +3189,155 @@ static void sugg_free_path(void) {
     sugg_cmds_loaded = 0;
 }
 
+/* Inicio do ultimo token, respeitando aspas simples/duplas e escapes. */
+static size_t sugg_last_token(const char *line, size_t len) {
+    size_t start = 0;
+    int in_s = 0, in_d = 0;
+    for (size_t i = 0; i < len; i++) {
+        char c = line[i];
+        if (c == '\\' && i + 1 < len) { i++; continue; }
+        if (c == '\'' && !in_d) in_s = !in_s;
+        else if (c == '"' && !in_s) in_d = !in_d;
+        else if ((c == ' ' || c == '\t') && !in_s && !in_d) start = i + 1;
+    }
+    return start;
+}
+
+/* Comandos que costumam receber caminhos como argumento. */
+static int sugg_is_path_cmd(const char *line, size_t len, int *is_cd) {
+    static const char *const cmds[] = {
+        "cd", "ls", "cat", "less", "more", "head", "tail", "vim", "nvim",
+        "nano", "code", "cp", "mv", "rm", "mkdir", "rmdir", "touch", "ln",
+        "stat", "file", "du", "df", "find", "python3", "node", "gcc",
+    };
+    size_t i = 0;
+    while (i < len && (line[i] == ' ' || line[i] == '\t')) i++;
+    size_t j = i;
+    while (j < len && line[j] != ' ' && line[j] != '\t') j++;
+    size_t n = j - i;
+    if (is_cd) *is_cd = (n == 2 && strncmp(line + i, "cd", 2) == 0);
+    for (int k = 0; k < (int)(sizeof(cmds) / sizeof(cmds[0])); k++) {
+        if (strlen(cmds[k]) == n && strncmp(cmds[k], line + i, n) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+/* Completa o ultimo token com um caminho do sistema de arquivos. */
+static int sugg_path(const char *line, size_t len, int has_space) {
+    size_t tok_start = has_space ? sugg_last_token(line, len) : 0;
+    const char *tok = line + tok_start;
+    size_t tok_len = len - tok_start;
+
+    if (tok_len > 0 && tok[0] == '-') return 0;   /* opcao, nao caminho */
+
+    char quote = 0;
+    if (tok_len > 0 && (tok[0] == '\'' || tok[0] == '"')) {
+        quote = tok[0];
+        if (memchr(tok + 1, quote, tok_len - 1)) return 0; /* ja fechou */
+        tok++;
+        tok_len--;
+    }
+
+    const char *slash = NULL;
+    for (size_t i = 0; i < tok_len; i++)
+        if (tok[i] == '/') slash = tok + i;
+
+    char dir[PATH_MAX];
+    const char *base = tok;
+    size_t base_len = tok_len;
+
+    if (slash) {
+        size_t dlen = (size_t)(slash - tok) + 1;   /* inclui a barra */
+        base = slash + 1;
+        base_len = tok_len - dlen;
+        if (tok[0] == '~') {
+            const char *home = getenv("HOME");
+            if (!home) return 0;
+            snprintf(dir, sizeof(dir), "%s%.*s", home, (int)(dlen - 1), tok + 1);
+        } else {
+            snprintf(dir, sizeof(dir), "%.*s", (int)dlen, tok);
+        }
+    } else {
+        if (tok_len == 1 && tok[0] == '~') {
+            /* "~" -> "~/" */
+            snprintf(sugg_text, sizeof(sugg_text), "/%s", quote ? (char[]){quote, 0} : "");
+            sugg_active = 1;
+            return 1;
+        }
+        snprintf(dir, sizeof(dir), ".");
+    }
+
+    DIR *d = opendir(dir);
+    if (!d) return 0;
+
+    int is_cd = 0;
+    sugg_is_path_cmd(line, len, &is_cd);
+
+    char best[PATH_MAX];
+    best[0] = '\0';
+    int best_is_dir = 0, best_exact_dir = 0;
+
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+        const char *name = e->d_name;
+        size_t nlen = strlen(name);
+
+        if (name[0] == '.' && base_len == 0) continue;   /* ocultos */
+        if ((strcmp(name, ".") == 0 || strcmp(name, "..") == 0) &&
+            (base_len == 0 || base[0] != '.')) continue;
+        if (strncmp(name, base, base_len) != 0) continue;
+
+        char full[PATH_MAX];
+        if (snprintf(full, sizeof(full), "%s/%s", dir, name) >= (int)sizeof(full))
+            continue;
+        struct stat st;
+        int is_dir = (stat(full, &st) == 0 && S_ISDIR(st.st_mode));
+        if (is_cd && !is_dir) continue;
+        if (quote && strchr(name, quote)) continue;
+
+        if (nlen == base_len) {
+            /* Caminho ja completo. Para "cd" (ou algo que nao seja "."),
+               sugere a barra final; para "cat ." prefere .bashrc etc. */
+            if (is_dir && (is_cd || !(base_len == 1 && base[0] == '.'))) {
+                snprintf(best, sizeof(best), "%s", name);
+                best_is_dir = 1;
+                best_exact_dir = 1;
+                break;
+            }
+            continue;
+        }
+        if (best[0] == '\0' || strcasecmp(name, best) < 0) {
+            snprintf(best, sizeof(best), "%s", name);
+            best_is_dir = is_dir;
+        }
+    }
+    closedir(d);
+    if (best[0] == '\0') return 0;
+
+    char suffix[PATH_MAX];
+    if (best_exact_dir)
+        snprintf(suffix, sizeof(suffix), "/");
+    else
+        snprintf(suffix, sizeof(suffix), "%s%s", best + base_len,
+                 best_is_dir ? "/" : "");
+
+    size_t out = 0;
+    for (size_t i = 0; suffix[i] && out + 4 < sizeof(sugg_text); i++) {
+        if (!quote && suffix[i] == ' ') {
+            sugg_text[out++] = '\\';
+            sugg_text[out++] = ' ';
+        } else {
+            sugg_text[out++] = suffix[i];
+        }
+    }
+    if (quote) sugg_text[out++] = quote;
+    sugg_text[out] = '\0';
+    if (out == 0) return 0;
+    sugg_active = 1;
+    return 1;
+}
+
 static void suggestion_compute(void) {
     sugg_active = 0;
     if (!rl_line_buffer || rl_point != rl_end || rl_end <= 0) return;
@@ -3215,7 +3365,11 @@ static void suggestion_compute(void) {
     }
 
     if (!has_space) {
-        /* 2. comandos internos com barra. */
+        /* 2. caminho explicito como nome do comando (./script, ~/bin/x). */
+        if (strchr(line, '/') || line[0] == '~' || line[0] == '.') {
+            if (sugg_path(line, len, 0)) return;
+        }
+        /* 3. comandos internos com barra. */
         if (line[0] == '/') {
             static const char *const slashes[] = {
                 "/kalc", "/lang", "/theme", "/tutorial", "/help",
@@ -3271,7 +3425,21 @@ static void suggestion_compute(void) {
             if (best >= 0) { sugg_set(sugg_cmds[best], len); return; }
         }
     } else {
-        /* 5. atalhos prontos com argumentos. */
+        /* 6. caminho no ultimo argumento (cd Doc -> Documents/). */
+        size_t tok = sugg_last_token(line, len);
+        int explicit_path = 0;
+        if (tok < len) {
+            if (line[tok] == '/' || line[tok] == '~' || line[tok] == '.' ||
+                line[tok] == '\'' || line[tok] == '"')
+                explicit_path = 1;
+            else if (memchr(line + tok, '/', len - tok))
+                explicit_path = 1;
+        }
+        int is_cd = 0;
+        int path_cmd = sugg_is_path_cmd(line, len, &is_cd);
+        if ((path_cmd || explicit_path) && sugg_path(line, len, 1)) return;
+
+        /* 7. atalhos prontos com argumentos. */
         static const char *const snippets[] = {
             "git status", "git log --oneline", "git diff", "git add .",
             "git commit -m \"\"", "git push", "git pull", "git switch -c ",

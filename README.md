@@ -16,8 +16,9 @@ aprender sistemas operacionais e programação de baixo nível.
 - Background: `comando &`, `jobs`, `fg`
 - Histórico persistente com setas e Tab (readline)
 - Sugestões inline estilo fish: texto cinza completa o comando a partir do
-  histórico, comandos internos, atalhos e executáveis do `PATH`; **→**
-  aceita a sugestão
+  histórico, comandos internos, atalhos e executáveis do `PATH`, e completa
+  caminhos/arquivos nos argumentos (`cd Doc` → `Documents/`, `ls ma` →
+  `main.c`); **→** aceita a sugestão
 - Globbing: `*`, `?`, `[...]`
 - Expansão de `~`
 - Galáxia e banner animados no topo (região de rolagem própria, sem conflitar com o readline)
