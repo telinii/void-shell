@@ -24,6 +24,9 @@
 static void anim_clear_screen(void);
 static void anim_reapply_region(void);
 static void kalc_run(const char *start);
+static int lang_run(const char *start);
+static void lang_load(void);
+static const char *tr(const char *en, const char *pt);
 
 static int last_status = 0;
 
@@ -745,6 +748,33 @@ static void run_line(char *line) {
             return;
         }
     }
+    /* /lang: troca o idioma do shell (en / pt) */
+    {
+        char *s = line;
+        while (*s == ' ' || *s == '\t') s++;
+        int lang_cmd = 0, off = 0;
+        if (strncmp(s, "/language", 9) == 0 &&
+            (s[9] == '\0' || s[9] == ' ' || s[9] == '\t')) {
+            lang_cmd = 1; off = 9;
+        } else if (strncmp(s, "/lang", 5) == 0 &&
+                   (s[5] == '\0' || s[5] == ' ' || s[5] == '\t')) {
+            lang_cmd = 1; off = 5;
+        }
+        if (lang_cmd) {
+            char *arg = s + off;
+            while (*arg == ' ' || *arg == '\t') arg++;
+            int alen = (int)strlen(arg);
+            while (alen > 0 && (arg[alen - 1] == ' ' || arg[alen - 1] == '\t'))
+                arg[--alen] = '\0';
+            int changed = lang_run(*arg ? arg : NULL);
+            anim_reapply_region();
+            if (changed)
+                printf("%s\n", tr("Language set to English.",
+                                  "Idioma definido para Português (Brasil)."));
+            last_status = 0;
+            return;
+        }
+    }
     char *cmds[MAX_CMDS];
     int ops[MAX_CMDS];
     int ncmd = 0;
@@ -1124,16 +1154,106 @@ static void print_banner(void) {
 }
 
 /* ================================================================== */
-/* /kalc - mini manual de matematica interativo (menu + mouse)        */
+/* i18n + /kalc + /lang                                                */
 /* ================================================================== */
 
+typedef enum {
+    LANG_EN = 0,
+    LANG_PT = 1
+} ShellLang;
+
+static ShellLang current_lang = LANG_EN;
+
+/* Retorna o texto no idioma atual. */
+static const char *tr(const char *en, const char *pt) {
+    return current_lang == LANG_PT ? pt : en;
+}
+
+static void lang_path(char *buf, size_t n) {
+    const char *home = getenv("HOME");
+    snprintf(buf, n, "%s/.void_shell_lang", home ? home : ".");
+}
+
+static void lang_load(void) {
+    char path[4096], buf[32];
+    lang_path(path, sizeof(path));
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+    if (fgets(buf, sizeof(buf), f)) {
+        if (strncmp(buf, "pt", 2) == 0) current_lang = LANG_PT;
+        else if (strncmp(buf, "en", 2) == 0) current_lang = LANG_EN;
+    }
+    fclose(f);
+}
+
+static void lang_save(void) {
+    char path[4096];
+    lang_path(path, sizeof(path));
+    FILE *f = fopen(path, "w");
+    if (!f) return;
+    fprintf(f, "%s\n", current_lang == LANG_PT ? "pt" : "en");
+    fclose(f);
+}
+
+static int lang_parse(const char *s) {
+    if (!s) return -1;
+    if (strcasecmp(s, "en") == 0 || strcasecmp(s, "english") == 0 ||
+        strcasecmp(s, "ingles") == 0 || strcasecmp(s, "inglês") == 0)
+        return LANG_EN;
+    if (strcasecmp(s, "pt") == 0 || strcasecmp(s, "pt-br") == 0 ||
+        strcasecmp(s, "ptbr") == 0 || strcasecmp(s, "portugues") == 0 ||
+        strcasecmp(s, "português") == 0 || strcasecmp(s, "portuguese") == 0)
+        return LANG_PT;
+    return -1;
+}
+
+/* ------------------------------------------------------------------ */
+/* Conteudo do /kalc (ingles + portugues do Brasil)                    */
+/* ------------------------------------------------------------------ */
+
 typedef struct {
-    const char *title;
-    const char *const *lines;
-    int nlines;
+    const char *title_en;
+    const char *title_pt;
+    const char *const *lines_en;
+    int nlines_en;
+    const char *const *lines_pt;
+    int nlines_pt;
 } KalcTopic;
 
-static const char *const kalc_sum[] = {
+static const char *const kalc_sum_en[] = {
+    "# What it is",
+    "Addition means putting quantities together. The result is the sum or total.",
+    "a + b = c, where a and b are the addends and c is the sum.",
+    "",
+    "# Examples: from basic to advanced",
+    "- 2 + 3 = 5",
+    "- 17 + 25 = 42",
+    "- 248 + 137 = 385",
+    "- 1/2 + 1/3 = 5/6  (fractions: make the denominators equal)",
+    "- 0.75 + 1.50 = 2.25  (line up the decimal points)",
+    "- 7 + (-3) = 4  (adding a negative is subtracting)",
+    "",
+    "# Rules and properties",
+    "- Commutative: a + b = b + a",
+    "- Associative: (a + b) + c = a + (b + c)",
+    "- Identity: a + 0 = a",
+    "- Opposite: a + (-a) = 0",
+    "- Fractions: a/b + c/d = (ad + cb) / bd",
+    "",
+    "# Tricks",
+    "- Add the tens first, then the ones.",
+    "- To add 9, 19, 29...: add 10, 20, 30 and subtract 1.",
+    "- For 98, 97...: round up to 100 and adjust.",
+    "- 1 + 2 + ... + n = n(n+1)/2.",
+    "- Pairs that make 10: 1+9, 2+8, 3+7, 4+6, 5+5.",
+    "",
+    "# Common mistakes",
+    "- Not lining up the decimal places.",
+    "- Adding numerators and denominators of fractions directly.",
+    "- Getting the sign wrong when adding negatives.",
+};
+
+static const char *const kalc_sum_pt[] = {
     "# O que é",
     "Somar é juntar quantidades. O resultado é a soma ou total.",
     "a + b = c, onde a e b são as parcelas e c é a soma.",
@@ -1166,7 +1286,41 @@ static const char *const kalc_sum[] = {
     "- Trocar o sinal ao somar negativos.",
 };
 
-static const char *const kalc_sub[] = {
+static const char *const kalc_sub_en[] = {
+    "# What it is",
+    "Subtraction means taking one quantity away from another: a - b = c.",
+    "a is the minuend, b the subtrahend, and c the difference.",
+    "",
+    "# Examples: from basic to advanced",
+    "- 9 - 4 = 5",
+    "- 52 - 18 = 34",
+    "- 300 - 125 = 175",
+    "- 3/4 - 1/4 = 2/4 = 1/2",
+    "- 2.5 - 0.75 = 1.75",
+    "- 5 - (-3) = 8  (minus a negative becomes plus)",
+    "- 10 - 25 = -15",
+    "",
+    "# Rules and properties",
+    "- Not commutative: a - b != b - a (in general).",
+    "- Subtracting is adding the opposite: a - b = a + (-b).",
+    "- a - 0 = a  and  a - a = 0.",
+    "- Signs: -(-x) = x  and  -(a + b) = -a - b.",
+    "- Fractions: a/b - c/d = (ad - cb) / bd.",
+    "",
+    "# Tricks",
+    "- To subtract 9: subtract 10 and give 1 back.",
+    "- To subtract 99: subtract 100 and give 1 back.",
+    "- Complete the ten: 63 - 47 = 63 - 50 + 3 = 16.",
+    "- Check with addition: if a - b = c, then c + b = a.",
+    "- With money, think of the change.",
+    "",
+    "# Common mistakes",
+    "- Reversing the order in 'how many are missing' questions.",
+    "- Getting the sign wrong with parentheses.",
+    "- Not lining up the decimal points.",
+};
+
+static const char *const kalc_sub_pt[] = {
     "# O que é",
     "Subtrair é retirar uma quantidade de outra: a - b = c.",
     "a é o minuendo, b o subtraendo e c a diferença.",
@@ -1200,7 +1354,42 @@ static const char *const kalc_sub[] = {
     "- Não alinhar as vírgulas.",
 };
 
-static const char *const kalc_mul[] = {
+static const char *const kalc_mul_en[] = {
+    "# What it is",
+    "Multiplication is adding equal parts: a x b = c.",
+    "3 x 4 = 3 + 3 + 3 + 3 = 12.",
+    "",
+    "# Examples: from basic to advanced",
+    "- 6 x 7 = 42",
+    "- 12 x 15 = 180",
+    "- 25 x 4 = 100",
+    "- 1/2 x 1/3 = 1/6",
+    "- 0.5 x 0.2 = 0.10",
+    "- (-3) x 4 = -12",
+    "- (-3) x (-4) = 12",
+    "",
+    "# Rules and properties",
+    "- Commutative: a x b = b x a",
+    "- Associative: (a x b) x c = a x (b x c)",
+    "- Distributive: a x (b + c) = ab + ac",
+    "- Identity: a x 1 = a   |   Zero: a x 0 = 0",
+    "- Signs: (+)(+) = +, (-)(-) = +, (+)(-) = -",
+    "- Fractions: (a/b) x (c/d) = ac/bd",
+    "",
+    "# Tricks",
+    "- 9 times table: 9 x n = 10n - n.",
+    "- x5 = half of x10; x25 = x100/4; x50 = x100/2.",
+    "- x11 (2 digits): 23 x 11 = 2 (2+3) 3 = 253.",
+    "- (a+b)(a-b) = a^2 - b^2.",
+    "- x4 = double twice.",
+    "",
+    "# Common mistakes",
+    "- Thinking (-)(-) gives a negative.",
+    "- Multiplying numerator by denominator.",
+    "- Misplacing the decimal point: 0.2 x 0.3 = 0.06 (two places).",
+};
+
+static const char *const kalc_mul_pt[] = {
     "# O que é",
     "Multiplicar é somar parcelas iguais: a x b = c.",
     "3 x 4 = 3 + 3 + 3 + 3 = 12.",
@@ -1235,7 +1424,44 @@ static const char *const kalc_mul[] = {
     "- Errar a vírgula: 0,2 x 0,3 = 0,06 (duas casas).",
 };
 
-static const char *const kalc_div[] = {
+static const char *const kalc_div_en[] = {
+    "# What it is",
+    "Division means splitting into equal parts: a / b = c.",
+    "a is the dividend, b the divisor, and c the quotient.",
+    "The remainder is what is left when the division is not exact.",
+    "",
+    "# Examples: from basic to advanced",
+    "- 12 / 3 = 4",
+    "- 45 / 5 = 9",
+    "- 100 / 8 = 12.5",
+    "- 7 / 2 = 3.5",
+    "- (1/2) / (1/4) = 2",
+    "- 10 / 0 = undefined (does not exist)",
+    "",
+    "# Rules and properties",
+    "- Not commutative: a / b != b / a.",
+    "- Dividing is multiplying by the inverse: a / b = a x (1/b).",
+    "- a / 1 = a   |   a / a = 1 (a != 0)   |   0 / a = 0.",
+    "- Signs: (+)/(+) = +, (-)/(-) = +, (+)/(-) = -.",
+    "- Fractions: (a/b) / (c/d) = (a/b) x (d/c).",
+    "- With remainder: a = bq + r, with 0 <= r < b.",
+    "",
+    "# Tricks",
+    "- /5 = x2 /10;  /25 = x4 /100;  /50 = x2 /100.",
+    "- To divide by 4: divide by 2 twice.",
+    "- Divisibility: 3 (sum of digits), 9 (same),",
+    "  5 (ends in 0 or 5), 2 (even).",
+    "- Estimate by rounding and adjust at the end.",
+    "- A rule of three is just a proportion.",
+    "",
+    "# Common mistakes",
+    "- Dividing by zero.",
+    "- Swapping dividend and divisor.",
+    "- Forgetting the remainder in integer division.",
+    "- Not flipping the bottom fraction.",
+};
+
+static const char *const kalc_div_pt[] = {
     "# O que é",
     "Dividir é repartir em partes iguais: a / b = c.",
     "a é o dividendo, b o divisor e c o quociente.",
@@ -1273,10 +1499,26 @@ static const char *const kalc_div[] = {
 };
 
 static const KalcTopic kalc_topics[] = {
-    { "Sum (soma)", kalc_sum, (int)(sizeof(kalc_sum) / sizeof(kalc_sum[0])) },
-    { "Subtract (subtração)", kalc_sub, (int)(sizeof(kalc_sub) / sizeof(kalc_sub[0])) },
-    { "Multiplication (multiplicação)", kalc_mul, (int)(sizeof(kalc_mul) / sizeof(kalc_mul[0])) },
-    { "Division (divisão)", kalc_div, (int)(sizeof(kalc_div) / sizeof(kalc_div[0])) },
+    {
+        "Sum", "Soma",
+        kalc_sum_en, (int)(sizeof(kalc_sum_en) / sizeof(kalc_sum_en[0])),
+        kalc_sum_pt, (int)(sizeof(kalc_sum_pt) / sizeof(kalc_sum_pt[0])),
+    },
+    {
+        "Subtraction", "Subtração",
+        kalc_sub_en, (int)(sizeof(kalc_sub_en) / sizeof(kalc_sub_en[0])),
+        kalc_sub_pt, (int)(sizeof(kalc_sub_pt) / sizeof(kalc_sub_pt[0])),
+    },
+    {
+        "Multiplication", "Multiplicação",
+        kalc_mul_en, (int)(sizeof(kalc_mul_en) / sizeof(kalc_mul_en[0])),
+        kalc_mul_pt, (int)(sizeof(kalc_mul_pt) / sizeof(kalc_mul_pt[0])),
+    },
+    {
+        "Division", "Divisão",
+        kalc_div_en, (int)(sizeof(kalc_div_en) / sizeof(kalc_div_en[0])),
+        kalc_div_pt, (int)(sizeof(kalc_div_pt) / sizeof(kalc_div_pt[0])),
+    },
 };
 #define KALC_NTOPICS ((int)(sizeof(kalc_topics) / sizeof(kalc_topics[0])))
 #define KALC_MENU_TOP 5
@@ -1300,13 +1542,27 @@ static void kalc_size(void) {
     }
 }
 
+static const char *kalc_title(const KalcTopic *t) {
+    return current_lang == LANG_PT ? t->title_pt : t->title_en;
+}
+
+static const char *const *kalc_body(const KalcTopic *t, int *n) {
+    if (current_lang == LANG_PT) {
+        *n = t->nlines_pt;
+        return t->lines_pt;
+    }
+    *n = t->nlines_en;
+    return t->lines_en;
+}
+
 static int kalc_find_topic(const char *s) {
     if (!s) return -1;
     if (s[0] >= '1' && s[0] < '1' + KALC_NTOPICS && s[1] == '\0')
         return s[0] - '1';
     if (strcasecmp(s, "sum") == 0 || strcasecmp(s, "soma") == 0) return 0;
     if (strcasecmp(s, "sub") == 0 || strcasecmp(s, "subtract") == 0 ||
-        strcasecmp(s, "subtracao") == 0 || strcasecmp(s, "subtração") == 0) return 1;
+        strcasecmp(s, "subtraction") == 0 || strcasecmp(s, "subtracao") == 0 ||
+        strcasecmp(s, "subtração") == 0) return 1;
     if (strcasecmp(s, "mul") == 0 || strcasecmp(s, "mult") == 0 ||
         strcasecmp(s, "multiplication") == 0 ||
         strcasecmp(s, "multiplicacao") == 0 || strcasecmp(s, "multiplicação") == 0) return 2;
@@ -1320,40 +1576,45 @@ static void kalc_print_plain(const char *start) {
     int idx = kalc_find_topic(start);
     if (idx >= 0) {
         const KalcTopic *t = &kalc_topics[idx];
-        printf("%s\n", t->title);
-        for (int i = 0; i < t->nlines; i++) {
-            const char *l = t->lines[i];
+        int n = 0;
+        const char *const *lines = kalc_body(t, &n);
+        printf("%s\n", kalc_title(t));
+        for (int i = 0; i < n; i++) {
+            const char *l = lines[i];
             if (l[0] == '#' && l[1] == ' ') printf("\n%s\n", l + 2);
             else if (l[0] == '-' && l[1] == ' ') printf("  - %s\n", l + 2);
             else printf("%s\n", l);
         }
         return;
     }
-    printf("KALC :: matemática básica\n");
+    printf("%s\n", tr("KALC :: basic math", "KALC :: matemática básica"));
     for (int i = 0; i < KALC_NTOPICS; i++)
-        printf("  [%d] %s\n", i + 1, kalc_topics[i].title);
-    printf("\nUse /kalc <topico> para abrir direto (ex.: /kalc sum).\n");
+        printf("  [%d] %s\n", i + 1, kalc_title(&kalc_topics[i]));
+    printf("\n%s\n", tr("Use /kalc <topic> to open directly (e.g.: /kalc sum).",
+                        "Use /kalc <topico> para abrir direto (ex.: /kalc sum)."));
 }
 
 static void kalc_render_menu(int sel) {
     kalc_size();
     printf("\033[?2026h\033[2J\033[H");
-    printf("\033[2;3H%sKALC :: matemática básica%s", KALC_PURPLE, KALC_RESET);
+    printf("\033[2;3H%s%s%s", KALC_PURPLE,
+           tr("KALC :: basic math", "KALC :: matemática básica"), KALC_RESET);
     printf("\033[3;3H%s-------------------------%s", KALC_DIM, KALC_RESET);
     for (int i = 0; i < KALC_NTOPICS; i++) {
         printf("\033[%d;3H", KALC_MENU_TOP + i);
         if (i == sel)
-            printf("%s > [%d]  %s %s", KALC_SEL, i + 1, kalc_topics[i].title, KALC_RESET);
+            printf("%s > [%d]  %s %s", KALC_SEL, i + 1, kalc_title(&kalc_topics[i]), KALC_RESET);
         else
-            printf("   [%d]  %s", i + 1, kalc_topics[i].title);
+            printf("   [%d]  %s", i + 1, kalc_title(&kalc_topics[i]));
     }
     printf("\033[%d;3H", KALC_MENU_QUIT);
     if (sel == KALC_NTOPICS)
-        printf("%s > [q]  Sair %s", KALC_SEL, KALC_RESET);
+        printf("%s > [q]  %s %s", KALC_SEL, tr("Quit", "Sair"), KALC_RESET);
     else
-        printf("   [q]  Sair");
-    printf("\033[%d;3H%sClique em um tópico, ou use ↑/↓ + Enter.%s",
-           KALC_MENU_QUIT + 2, KALC_DIM, KALC_RESET);
+        printf("   [q]  %s", tr("Quit", "Sair"));
+    printf("\033[%d;3H%s%s%s", KALC_MENU_QUIT + 2, KALC_DIM,
+           tr("Click a topic, or use ↑/↓ + Enter.",
+              "Clique em um tópico, ou use ↑/↓ + Enter."), KALC_RESET);
     printf("\033[?2026l");
     fflush(stdout);
 }
@@ -1382,24 +1643,26 @@ static int kalc_render_topic(int idx, int scroll) {
     kalc_size();
     int rows = kalc_rows;
     const KalcTopic *t = &kalc_topics[idx];
+    int n = 0;
+    const char *const *lines = kalc_body(t, &n);
     int body_top = 4;
     int body_rows = rows - body_top;
     if (body_rows < 1) body_rows = 1;
-    int max_scroll = t->nlines - body_rows;
+    int max_scroll = n - body_rows;
     if (max_scroll < 0) max_scroll = 0;
     if (scroll > max_scroll) scroll = max_scroll;
     if (scroll < 0) scroll = 0;
 
     printf("\033[?2026h\033[2J\033[H");
-    printf("\033[1;3H%s%s%s", KALC_PURPLE, t->title, KALC_RESET);
+    printf("\033[1;3H%s%s%s", KALC_PURPLE, kalc_title(t), KALC_RESET);
     printf("\033[2;3H%s-------------------------%s", KALC_DIM, KALC_RESET);
     int avail = kalc_cols - 4;
     if (avail < 1) avail = 1;
     for (int i = 0; i < body_rows; i++) {
         int li = scroll + i;
-        if (li >= t->nlines) break;
+        if (li >= n) break;
         printf("\033[%d;3H", body_top + i);
-        const char *raw = t->lines[li];
+        const char *raw = lines[li];
         int extra = (raw[0] == '-' && raw[1] == ' ') ? 2 : 0;
         char fit[512];
         const char *line = kalc_fit(raw, fit, sizeof(fit), avail - extra);
@@ -1411,8 +1674,10 @@ static int kalc_render_topic(int idx, int scroll) {
             printf("%s", line);
         }
     }
-    printf("\033[%d;3H%s[<] Voltar%s   ↑/↓ rolar   q voltar   %d/%d",
-           rows, KALC_DIM, KALC_RESET, scroll + 1, max_scroll + 1);
+    printf("\033[%d;3H%s[<] %s%s   ↑/↓ %s   q %s   %d/%d",
+           rows, KALC_DIM, tr("Back", "Voltar"), KALC_RESET,
+           tr("scroll", "rolar"), tr("back", "voltar"),
+           scroll + 1, max_scroll + 1);
     printf("\033[?2026l");
     fflush(stdout);
     return scroll;
@@ -1643,11 +1908,158 @@ static void kalc_run(const char *start) {
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig);
 }
 
+/* ------------------------------------------------------------------ */
+/* /lang - menu de idiomas                                             */
+/* ------------------------------------------------------------------ */
+
+#define LANG_MENU_TOP    5
+#define LANG_MENU_N      2
+#define LANG_PHRASE_ROW  8
+#define LANG_MENU_QUIT   10
+#define LANG_HINT_ROW    12
+
+static const char *const lang_names[LANG_MENU_N] = {
+    "English",
+    "Português (Brasil)",
+};
+
+static void lang_render(int sel) {
+    kalc_size();
+    printf("\033[?2026h\033[2J\033[H");
+    printf("\033[2;3H%s%s%s", KALC_PURPLE,
+           tr("LANGUAGE :: shell language", "IDIOMA :: idioma do shell"), KALC_RESET);
+    printf("\033[3;3H%s-------------------------%s", KALC_DIM, KALC_RESET);
+    for (int i = 0; i < LANG_MENU_N; i++) {
+        printf("\033[%d;3H", LANG_MENU_TOP + i);
+        const char *cur = ((int)current_lang == i) ? tr("  (current)", "  (atual)") : "";
+        if (i == sel)
+            printf("%s > [%d]  %s%s %s", KALC_SEL, i + 1, lang_names[i], cur, KALC_RESET);
+        else
+            printf("   [%d]  %s%s", i + 1, lang_names[i], cur);
+    }
+    printf("\033[%d;3H%s%s%s", LANG_PHRASE_ROW, KALC_DIM,
+           tr("More language support coming",
+              "Mais suporte a idiomas em breve"), KALC_RESET);
+    printf("\033[%d;3H", LANG_MENU_QUIT);
+    if (sel == LANG_MENU_N)
+        printf("%s > [q]  %s %s", KALC_SEL, tr("Cancel", "Cancelar"), KALC_RESET);
+    else
+        printf("   [q]  %s", tr("Cancel", "Cancelar"));
+    printf("\033[%d;3H%s%s%s", LANG_HINT_ROW, KALC_DIM,
+           tr("Click a language, or use ↑/↓ + Enter.",
+              "Clique em um idioma, ou use ↑/↓ + Enter."), KALC_RESET);
+    printf("\033[?2026l");
+    fflush(stdout);
+}
+
+/* Aplica um idioma. Retorna 1 se mudou. */
+static int lang_apply(int lang) {
+    if (lang != LANG_EN && lang != LANG_PT) return 0;
+    if ((int)current_lang == lang) return 0;
+    current_lang = (ShellLang)lang;
+    lang_save();
+    return 1;
+}
+
+/* Retorna 1 se o idioma foi alterado. */
+static int lang_run(const char *start) {
+    int idx = lang_parse(start);
+    if (idx >= 0) return lang_apply(idx);
+
+    if (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO)) {
+        printf("%s\n", tr("LANGUAGE :: shell language", "IDIOMA :: idioma do shell"));
+        for (int i = 0; i < LANG_MENU_N; i++)
+            printf("  [%d] %s%s\n", i + 1, lang_names[i],
+                   (int)current_lang == i ? tr("  (current)", "  (atual)") : "");
+        printf("  %s\n", tr("More language support coming",
+                            "Mais suporte a idiomas em breve"));
+        printf("%s\n", tr("Use /lang en or /lang pt.",
+                          "Use /lang en ou /lang pt."));
+        return 0;
+    }
+
+    struct termios orig, raw;
+    if (tcgetattr(STDIN_FILENO, &orig) != 0) return 0;
+    raw = orig;
+    raw.c_lflag &= ~(ICANON | ECHO | ISIG);
+    raw.c_iflag &= ~(IXON | ICRNL);
+    raw.c_cc[VMIN] = 1;
+    raw.c_cc[VTIME] = 0;
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+
+    printf("\033[?1049h\033[r\033[2J\033[H\033[?25l\033[?1000h\033[?1006h");
+    fflush(stdout);
+
+    int sel = (int)current_lang;
+    kalc_size();
+    int last_rows = kalc_rows, last_cols = kalc_cols;
+    lang_render(sel);
+
+    int changed = 0;
+    int running = 1;
+    while (running) {
+        KalcKey k;
+        int got = kalc_read_key(&k, 200);
+
+        kalc_size();
+        if (kalc_rows != last_rows || kalc_cols != last_cols) {
+            last_rows = kalc_rows;
+            last_cols = kalc_cols;
+            lang_render(sel);
+        }
+        if (!got) continue;
+
+        int choose = -1;
+        switch (k.type) {
+            case K_CHAR:
+                if (k.ch == 'q' || k.ch == 'Q' || k.ch == 3) {
+                    running = 0;
+                } else if (k.ch >= '1' && k.ch < '1' + LANG_MENU_N) {
+                    choose = k.ch - '1';
+                }
+                break;
+            case K_UP:
+                sel = (sel + LANG_MENU_N) % (LANG_MENU_N + 1);
+                lang_render(sel);
+                break;
+            case K_DOWN:
+                sel = (sel + 1) % (LANG_MENU_N + 1);
+                lang_render(sel);
+                break;
+            case K_ENTER:
+                if (sel < LANG_MENU_N) choose = sel;
+                else running = 0;
+                break;
+            case K_ESC:
+                running = 0;
+                break;
+            case K_MOUSE:
+                if (k.press && k.mb == 0) {
+                    if (k.my >= LANG_MENU_TOP && k.my < LANG_MENU_TOP + LANG_MENU_N)
+                        choose = k.my - LANG_MENU_TOP;
+                    else if (k.my == LANG_MENU_QUIT)
+                        running = 0;
+                }
+                break;
+        }
+        if (choose >= 0) {
+            changed = lang_apply(choose);
+            running = 0;
+        }
+    }
+
+    printf("\033[?1006l\033[?1000l\033[?25h\033[0m\033[?1049l");
+    fflush(stdout);
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig);
+    return changed;
+}
+
 static void save_history(void) {
     write_history(histfile);
 }
 
 int main(void) {
+    lang_load();
     const char *home = getenv("HOME");
     snprintf(histfile, sizeof(histfile), "%s/.void_shell_history", home ? home : ".");
     read_history(histfile);
