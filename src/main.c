@@ -23,9 +23,142 @@
 #define MAX_CMDS 16
 #define MAX_TOKEN 4096
 
-/* Roxo um pouco mais claro: texto digitado pelo usuario e conteudo das paginas. */
-#define VOID_TEXT_RGB   "190;150;255"
-#define VOID_TEXT_COLOR "\033[38;2;" VOID_TEXT_RGB "m"
+/* ------------------------------------------------------------------ */
+/* Temas: cores do prompt, do texto, do cabecalho, do HUD e do gradiente */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    const char *id;
+    const char *name;
+    int prompt[3];
+    int text[3];
+    int head[3];
+    int dim[3];
+    int sel_bg[3];
+    int hud_bg[3];
+    int hud_dim[3];
+    int ok[3];
+    int err[3];
+    int grad[5][3];
+} Theme;
+
+static const Theme themes[] = {
+    {
+        "galaxy", "Galaxy",
+        {140, 90, 220}, {190, 150, 255}, {180, 130, 255}, {120, 110, 140},
+        {70, 40, 120}, {24, 14, 42}, {140, 125, 175}, {120, 220, 150}, {255, 120, 120},
+        {{255, 255, 255}, {180, 130, 255}, {90, 40, 150}, {80, 80, 90}, {20, 20, 25}},
+    },
+    {
+        "matrix", "Matrix",
+        {60, 180, 90}, {150, 255, 180}, {110, 230, 150}, {90, 150, 110},
+        {20, 70, 40}, {6, 24, 12}, {90, 150, 110}, {150, 255, 180}, {255, 120, 120},
+        {{255, 255, 255}, {120, 255, 160}, {20, 140, 70}, {60, 90, 70}, {5, 15, 10}},
+    },
+    {
+        "synthwave", "Synthwave",
+        {255, 80, 170}, {255, 160, 225}, {110, 230, 255}, {150, 120, 180},
+        {90, 20, 80}, {30, 10, 40}, {160, 130, 190}, {110, 240, 230}, {255, 140, 90},
+        {{255, 255, 255}, {255, 120, 200}, {150, 60, 220}, {90, 60, 130}, {20, 10, 30}},
+    },
+    {
+        "mono", "Mono",
+        {150, 150, 160}, {230, 230, 235}, {210, 210, 220}, {140, 140, 150},
+        {70, 70, 80}, {20, 20, 24}, {150, 150, 160}, {220, 220, 220}, {255, 120, 120},
+        {{255, 255, 255}, {200, 200, 210}, {120, 120, 130}, {70, 70, 80}, {15, 15, 18}},
+    },
+};
+#define THEME_N ((int)(sizeof(themes) / sizeof(themes[0])))
+
+static int current_theme = 0;
+static char theme_prompt[24];
+static char theme_text[24];
+static char theme_head[24];
+static char theme_dim[24];
+static char theme_sel[48];
+static char theme_hud_bg[24];
+static char theme_hud_dim[24];
+static char theme_ok[24];
+static char theme_err[24];
+static char theme_grad[5][24];
+
+static void theme_fg(char *buf, size_t n, const int c[3]) {
+    snprintf(buf, n, "\033[38;2;%d;%d;%dm", c[0], c[1], c[2]);
+}
+
+static void theme_bg(char *buf, size_t n, const int c[3]) {
+    snprintf(buf, n, "\033[48;2;%d;%d;%dm", c[0], c[1], c[2]);
+}
+
+static void theme_build(void) {
+    const Theme *t = &themes[current_theme];
+    char bg[24];
+    theme_fg(theme_prompt, sizeof(theme_prompt), t->prompt);
+    theme_fg(theme_text, sizeof(theme_text), t->text);
+    theme_fg(theme_head, sizeof(theme_head), t->head);
+    theme_fg(theme_dim, sizeof(theme_dim), t->dim);
+    theme_fg(theme_hud_dim, sizeof(theme_hud_dim), t->hud_dim);
+    theme_fg(theme_ok, sizeof(theme_ok), t->ok);
+    theme_fg(theme_err, sizeof(theme_err), t->err);
+    theme_bg(theme_hud_bg, sizeof(theme_hud_bg), t->hud_bg);
+    theme_bg(bg, sizeof(bg), t->sel_bg);
+    snprintf(theme_sel, sizeof(theme_sel), "%s\033[38;2;255;255;255m", bg);
+    for (int i = 0; i < 5; i++)
+        theme_fg(theme_grad[i], sizeof(theme_grad[i]), t->grad[i]);
+}
+
+static void theme_path(char *buf, size_t n) {
+    const char *home = getenv("HOME");
+    snprintf(buf, n, "%s/.void_shell_theme", home ? home : ".");
+}
+
+static void theme_save(void) {
+    char path[4096];
+    theme_path(path, sizeof(path));
+    FILE *f = fopen(path, "w");
+    if (!f) return;
+    fprintf(f, "%s\n", themes[current_theme].id);
+    fclose(f);
+}
+
+static void theme_load(void) {
+    char path[4096], buf[64];
+    theme_build();
+    theme_path(path, sizeof(path));
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+    if (fgets(buf, sizeof(buf), f)) {
+        buf[strcspn(buf, "\r\n")] = '\0';
+        for (int i = 0; i < THEME_N; i++) {
+            if (strcasecmp(buf, themes[i].id) == 0) {
+                current_theme = i;
+                break;
+            }
+        }
+    }
+    fclose(f);
+    theme_build();
+}
+
+static int theme_find(const char *s) {
+    if (!s || !*s) return -1;
+    for (int i = 0; i < THEME_N; i++)
+        if (strcasecmp(s, themes[i].id) == 0) return i;
+    if (strcasecmp(s, "default") == 0) return 0;
+    if (strcasecmp(s, "green") == 0) return 1;
+    if (strcasecmp(s, "pink") == 0 || strcasecmp(s, "retro") == 0) return 2;
+    if (strcasecmp(s, "gray") == 0 || strcasecmp(s, "grey") == 0) return 3;
+    return -1;
+}
+
+static int theme_apply(int idx) {
+    if (idx < 0 || idx >= THEME_N) return 0;
+    if (idx == current_theme) return 0;
+    current_theme = idx;
+    theme_build();
+    theme_save();
+    return 1;
+}
 
 static void anim_clear_screen(void);
 static void anim_reapply_region(void);
@@ -34,6 +167,8 @@ static int lang_run(const char *start);
 static void lang_load(void);
 static const char *tr(const char *en, const char *pt);
 static void print_tutorial(void);
+static int theme_run(const char *start);
+static int anim_is_enabled(void);
 static void hud_draw(void);
 static void hud_tick(void);
 static void hud_cpu_update(void);
@@ -787,6 +922,28 @@ static void run_line(char *line) {
             return;
         }
     }
+    /* /theme: troca o tema de cores */
+    {
+        char *s = line;
+        while (*s == ' ' || *s == '\t') s++;
+        if (strncmp(s, "/theme", 6) == 0 &&
+            (s[6] == '\0' || s[6] == ' ' || s[6] == '\t')) {
+            char *arg = s + 6;
+            while (*arg == ' ' || *arg == '\t') arg++;
+            int alen = (int)strlen(arg);
+            while (alen > 0 && (arg[alen - 1] == ' ' || arg[alen - 1] == '\t'))
+                arg[--alen] = '\0';
+            int changed = theme_run(*arg ? arg : NULL);
+            anim_reapply_region();
+            if (changed) {
+                if (!anim_is_enabled()) anim_clear_screen();
+                printf("%s %s.\n", tr("Theme set to", "Tema definido para"),
+                       themes[current_theme].name);
+            }
+            last_status = 0;
+            return;
+        }
+    }
     /* /tutorial (alias /help): mostra o guia de boas-vindas de novo */
     {
         char *s = line;
@@ -918,15 +1075,9 @@ static void print_gradient_raw(const char *s, int offset) {
     for (int i = 0; i < len; i++) {
         int pos = (i + offset) % (len > 0 ? len : 1);
         int seg = (len > 1) ? (pos * 5 / len) : 0;
-        int r, g, b;
-        switch (seg) {
-            case 0: r = 255; g = 255; b = 255; break; /* branco */
-            case 1: r = 180; g = 130; b = 255; break; /* roxo claro */
-            case 2: r = 90;  g = 40;  b = 150; break; /* roxo escuro */
-            case 3: r = 80;  g = 80;  b = 90;  break; /* cinza */
-            default:r = 20;  g = 20;  b = 25;  break; /* quase preto */
-        }
-        printf("\033[38;2;%d;%d;%dm%c", r, g, b, s[i]);
+        if (seg < 0) seg = 0;
+        if (seg > 4) seg = 4;
+        printf("%s%c", theme_grad[seg], s[i]);
     }
     printf("\033[0m");
 }
@@ -1001,6 +1152,10 @@ static long hud_mem_used_mb = -1;
 static long hud_mem_total_mb = -1;
 static long long hud_prev_idle = -1;
 static long long hud_prev_total = -1;
+
+static int anim_is_enabled(void) {
+    return anim_enabled;
+}
 
 static void anim_read_size(void) {
     struct winsize ws;
@@ -1143,7 +1298,7 @@ static void anim_reapply_region(void) {
     printf("\033[s\033[%d;%dr", anim_region_top, anim_region_bottom);
     hud_force = 1;
     hud_tick();
-    printf("\033[u" VOID_TEXT_COLOR);
+    printf("\033[u%s", theme_text);
     fflush(stdout);
 }
 
@@ -1190,7 +1345,7 @@ static int anim_tick(void) {
         draw_block(logo_lines, 7, ANIM_HEADER_ROWS + 1, anim_cols, anim_offset);
     }
     hud_tick();
-    printf("\033[u" VOID_TEXT_COLOR "\033[?2026l");
+    printf("\033[u%s\033[?2026l", theme_text);
     fflush(stdout);
     return 0;
 }
@@ -1523,17 +1678,12 @@ static void hud_draw(void) {
                   - (stat[0] ? (int)strlen(stat) + 1 : 0) - rn;
     if (pad < 0) pad = 0;
 
-    printf("\033[%d;1H\033[48;2;24;14;42m", hud_row);
-    printf(VOID_TEXT_COLOR "%s", head);
-    if (stat[0]) {
-        printf(" %s%s",
-               last_status == 0
-                   ? "\033[38;2;120;220;150m"
-                   : "\033[38;2;255;120;120m",
-               stat);
-    }
+    printf("\033[%d;1H%s", hud_row, theme_hud_bg);
+    printf("%s%s", theme_text, head);
+    if (stat[0])
+        printf(" %s%s", last_status == 0 ? theme_ok : theme_err, stat);
     for (int i = 0; i < pad; i++) putchar(' ');
-    if (rn) printf("\033[38;2;140;125;175m%s", right);
+    if (rn) printf("%s%s", theme_hud_dim, right);
     printf("\033[0m");
 }
 
@@ -1879,10 +2029,10 @@ static const KalcTopic kalc_topics[] = {
 #define KALC_MENU_TOP 5
 #define KALC_MENU_QUIT (KALC_MENU_TOP + KALC_NTOPICS + 1)
 
-#define KALC_PURPLE "\033[38;2;180;130;255m"
-#define KALC_TEXT   VOID_TEXT_COLOR
-#define KALC_DIM    "\033[38;2;120;110;140m"
-#define KALC_SEL    "\033[48;2;70;40;120m\033[38;2;255;255;255m"
+#define KALC_PURPLE theme_head
+#define KALC_TEXT   theme_text
+#define KALC_DIM    theme_dim
+#define KALC_SEL    theme_sel
 #define KALC_RESET  "\033[0m"
 
 /* Guia rapido mostrado ao abrir o shell e pelo /tutorial. */
@@ -1895,8 +2045,8 @@ static void print_tutorial(void) {
 
     if (!full) {
         printf("%s%s%s\n", T,
-               tr("/kalc math · /lang language · /tutorial help",
-                  "/kalc matemática · /lang idioma · /tutorial ajuda"),
+               tr("/kalc math · /lang language · /theme colors · /tutorial help",
+                  "/kalc matemática · /lang idioma · /theme cores · /tutorial ajuda"),
                R);
         fflush(stdout);
         return;
@@ -1909,6 +2059,9 @@ static void print_tutorial(void) {
            tr("interactive math manual", "manual interativo de matemática"), R);
     printf("  %s/lang%s      %s%s%s\n", C, R, T,
            tr("change language (EN / PT)", "troca o idioma (EN / PT)"), R);
+    printf("  %s/theme%s     %s%s%s\n", C, R, T,
+           tr("change colors (galaxy, matrix...)",
+              "muda as cores (galaxy, matrix...)"), R);
     printf("  %sclear%s      %s%s%s\n", C, R, T,
            tr("clear the screen (Ctrl+L)", "limpa a tela (Ctrl+L)"), R);
     printf("  %sexit%s       %s%s%s\n", C, R, T,
@@ -2445,11 +2598,161 @@ static int lang_run(const char *start) {
     return changed;
 }
 
+/* ------------------------------------------------------------------ */
+/* /theme - menu de temas                                             */
+/* ------------------------------------------------------------------ */
+
+#define THEME_MENU_TOP     5
+#define THEME_MENU_QUIT    (THEME_MENU_TOP + THEME_N + 1)
+#define THEME_PREVIEW_ROW  (THEME_MENU_QUIT + 2)
+#define THEME_HINT_ROW     (THEME_PREVIEW_ROW + 2)
+
+static void theme_swatch(const Theme *t) {
+    for (int i = 0; i < 10; i++) {
+        int seg = i * 5 / 10;
+        if (seg > 4) seg = 4;
+        printf("\033[48;2;%d;%d;%dm ", t->grad[seg][0],
+               t->grad[seg][1], t->grad[seg][2]);
+    }
+    printf(KALC_RESET);
+}
+
+static void theme_render(int sel) {
+    kalc_size();
+    printf("\033[?2026h\033[2J\033[H");
+    printf("\033[2;3H%s%s%s", theme_head,
+           tr("THEME :: shell colors", "TEMA :: cores do shell"), KALC_RESET);
+    printf("\033[3;3H%s-------------------------%s", theme_dim, KALC_RESET);
+    for (int i = 0; i < THEME_N; i++) {
+        const Theme *t = &themes[i];
+        const char *cur = (i == current_theme) ? tr("  (current)", "  (atual)") : "";
+        char label[64];
+        snprintf(label, sizeof(label), "%s%s", t->name, cur);
+        printf("\033[%d;3H", THEME_MENU_TOP + i);
+        if (i == sel)
+            printf("%s > [%d]  %-24s %s", theme_sel, i + 1, label, KALC_RESET);
+        else
+            printf("   [%d]  %s%-24s%s", i + 1, theme_text, label, KALC_RESET);
+        theme_swatch(t);
+    }
+    printf("\033[%d;3H", THEME_MENU_QUIT);
+    if (sel == THEME_N)
+        printf("%s > [q]  %s %s", theme_sel, tr("Cancel", "Cancelar"), KALC_RESET);
+    else
+        printf("   [q]  %s%s%s", theme_text, tr("Cancel", "Cancelar"), KALC_RESET);
+
+    const Theme *t = &themes[sel < THEME_N ? sel : current_theme];
+    printf("\033[%d;3H\033[38;2;%d;%d;%dmvoid-shell> "
+           "\033[38;2;%d;%d;%dmecho hello  "
+           "\033[38;2;%d;%d;%dmok 12ms" KALC_RESET,
+           THEME_PREVIEW_ROW,
+           t->prompt[0], t->prompt[1], t->prompt[2],
+           t->text[0], t->text[1], t->text[2],
+           t->ok[0], t->ok[1], t->ok[2]);
+    printf("\033[%d;3H%s%s%s", THEME_HINT_ROW, theme_dim,
+           tr("Click a theme, or use ↑/↓ + Enter.",
+              "Clique em um tema, ou use ↑/↓ + Enter."), KALC_RESET);
+    printf("\033[?2026l");
+    fflush(stdout);
+}
+
+/* Retorna 1 se o tema foi alterado. */
+static int theme_run(const char *start) {
+    int idx = theme_find(start);
+    if (idx >= 0) return theme_apply(idx);
+
+    if (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO)) {
+        printf("%s\n", tr("THEME :: shell colors", "TEMA :: cores do shell"));
+        for (int i = 0; i < THEME_N; i++)
+            printf("  [%d] %s%s\n", i + 1, themes[i].name,
+                   i == current_theme ? tr("  (current)", "  (atual)") : "");
+        printf("%s\n", tr("Use /theme galaxy, /theme matrix, /theme synthwave or /theme mono.",
+                          "Use /theme galaxy, /theme matrix, /theme synthwave ou /theme mono."));
+        return 0;
+    }
+
+    struct termios orig, raw;
+    if (tcgetattr(STDIN_FILENO, &orig) != 0) return 0;
+    raw = orig;
+    raw.c_lflag &= ~(ICANON | ECHO | ISIG);
+    raw.c_iflag &= ~(IXON | ICRNL);
+    raw.c_cc[VMIN] = 1;
+    raw.c_cc[VTIME] = 0;
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+
+    printf("\033[?1049h\033[r\033[2J\033[H\033[?25l\033[?1000h\033[?1006h");
+    fflush(stdout);
+
+    int sel = current_theme;
+    kalc_size();
+    int last_rows = kalc_rows, last_cols = kalc_cols;
+    theme_render(sel);
+
+    int changed = 0;
+    int running = 1;
+    while (running) {
+        KalcKey k;
+        int got = kalc_read_key(&k, 200);
+
+        kalc_size();
+        if (kalc_rows != last_rows || kalc_cols != last_cols) {
+            last_rows = kalc_rows;
+            last_cols = kalc_cols;
+            theme_render(sel);
+        }
+        if (!got) continue;
+
+        int choose = -1;
+        switch (k.type) {
+            case K_CHAR:
+                if (k.ch == 'q' || k.ch == 'Q' || k.ch == 3) {
+                    running = 0;
+                } else if (k.ch >= '1' && k.ch < '1' + THEME_N) {
+                    choose = k.ch - '1';
+                }
+                break;
+            case K_UP:
+                sel = (sel + THEME_N) % (THEME_N + 1);
+                theme_render(sel);
+                break;
+            case K_DOWN:
+                sel = (sel + 1) % (THEME_N + 1);
+                theme_render(sel);
+                break;
+            case K_ENTER:
+                if (sel < THEME_N) choose = sel;
+                else running = 0;
+                break;
+            case K_ESC:
+                running = 0;
+                break;
+            case K_MOUSE:
+                if (k.press && k.mb == 0) {
+                    if (k.my >= THEME_MENU_TOP && k.my < THEME_MENU_TOP + THEME_N)
+                        choose = k.my - THEME_MENU_TOP;
+                    else if (k.my == THEME_MENU_QUIT)
+                        running = 0;
+                }
+                break;
+        }
+        if (choose >= 0) {
+            changed = theme_apply(choose);
+            running = 0;
+        }
+    }
+
+    printf("\033[?1006l\033[?1000l\033[?25h\033[0m\033[?1049l");
+    fflush(stdout);
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig);
+    return changed;
+}
+
 static void save_history(void) {
     write_history(histfile);
 }
 
 int main(void) {
+    theme_load();
     lang_load();
     const char *home = getenv("HOME");
     snprintf(histfile, sizeof(histfile), "%s/.void_shell_history", home ? home : ".");
@@ -2486,7 +2789,10 @@ int main(void) {
                 fflush(stdout);
             }
         }
-        char *input = readline("\001\033[38;2;140;90;220m\002void-shell> \001" VOID_TEXT_COLOR "\002");
+        char prompt[128];
+        snprintf(prompt, sizeof(prompt),
+                 "\001%s\002void-shell> \001%s\002", theme_prompt, theme_text);
+        char *input = readline(prompt);
         printf("\033[0m");
         if (!anim_logo_pinned) anim_logo_live = 0;
         if (!input) { /* EOF (Ctrl+D) */
