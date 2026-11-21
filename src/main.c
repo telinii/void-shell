@@ -30,16 +30,22 @@ static int njobs = 0;
 static int next_jobid = 1;
 static int bg_current = 0;
 static char *bg_cmd = NULL;
+static pid_t shell_pgid = 0;
+static int shell_terminal = -1;
 
 static void reap_children(void) {
     int status;
     pid_t pid;
-    while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+    while ((pid = waitpid(-1, &status, WNOHANG | WUNTRACED)) > 0) {
         for (int i = 0; i < njobs; i++) {
             if (jobs[i].pid == pid) {
-                jobs[i].running = 0;
-                if (WIFEXITED(status)) last_status = WEXITSTATUS(status);
-                else if (WIFSIGNALED(status)) last_status = 128 + WTERMSIG(status);
+                if (WIFSTOPPED(status)) {
+                    jobs[i].running = 2;
+                } else {
+                    jobs[i].running = 0;
+                    if (WIFEXITED(status)) last_status = WEXITSTATUS(status);
+                    else if (WIFSIGNALED(status)) last_status = 128 + WTERMSIG(status);
+                }
             }
         }
     }
@@ -219,7 +225,9 @@ static int do_builtin(char **argv) {
     }
     if (strcmp(argv[0], "jobs") == 0) {
         for (int i = 0; i < njobs; i++) {
-            if (jobs[i].running)
+            if (jobs[i].running == 2)
+                printf("[%d]  Stopped   %s\n", jobs[i].id, jobs[i].cmd);
+            else if (jobs[i].running == 1)
                 printf("[%d]  Running   %s &\n", jobs[i].id, jobs[i].cmd);
             else
                 printf("[%d]  Done      %s\n", jobs[i].id, jobs[i].cmd);
@@ -244,20 +252,49 @@ static int do_builtin(char **argv) {
         }
         for (int i = 0; i < njobs; i++) {
             if (jobs[i].id == id && jobs[i].running) {
+                if (jobs[i].running == 2) kill(jobs[i].pid, SIGCONT);
                 printf("%s\n", jobs[i].cmd);
+                if (shell_terminal >= 0) tcsetpgrp(shell_terminal, jobs[i].pid);
                 int status;
-                waitpid(jobs[i].pid, &status, 0);
-                jobs[i].running = 0;
-                if (WIFEXITED(status)) last_status = WEXITSTATUS(status);
-                else if (WIFSIGNALED(status)) last_status = 128 + WTERMSIG(status);
-                free(jobs[i].cmd);
-                /* remove */
-                for (int j = i; j < njobs - 1; j++) jobs[j] = jobs[j+1];
-                njobs--;
+                waitpid(jobs[i].pid, &status, WUNTRACED);
+                if (shell_terminal >= 0) tcsetpgrp(shell_terminal, shell_pgid);
+                if (WIFSTOPPED(status)) {
+                    jobs[i].running = 2;
+                    printf("\n[%d]+  Stopped                 %s\n", jobs[i].id, jobs[i].cmd);
+                    last_status = 128 + WSTOPSIG(status);
+                } else {
+                    jobs[i].running = 0;
+                    if (WIFEXITED(status)) last_status = WEXITSTATUS(status);
+                    else if (WIFSIGNALED(status)) last_status = 128 + WTERMSIG(status);
+                    free(jobs[i].cmd);
+                    for (int j = i; j < njobs - 1; j++) jobs[j] = jobs[j+1];
+                    njobs--;
+                }
                 return 1;
             }
         }
         fprintf(stderr, "fg: no such job\n");
+        last_status = 1;
+        return 1;
+    }
+    if (strcmp(argv[0], "bg") == 0) {
+        int id = 0;
+        if (argv[1]) {
+            if (argv[1][0] == '%') id = atoi(argv[1] + 1);
+            else id = atoi(argv[1]);
+        } else if (njobs > 0) {
+            id = jobs[njobs-1].id;
+        }
+        for (int i = 0; i < njobs; i++) {
+            if (jobs[i].id == id && jobs[i].running == 2) {
+                kill(jobs[i].pid, SIGCONT);
+                jobs[i].running = 1;
+                printf("[%d] %s &\n", jobs[i].id, jobs[i].cmd);
+                last_status = 0;
+                return 1;
+            }
+        }
+        fprintf(stderr, "bg: no such job\n");
         last_status = 1;
         return 1;
     }
@@ -350,7 +387,9 @@ static void run_external(char **argv, char *infile, char *outfile, int append) {
         return;
     }
     if (pid == 0) {
-        /* coloca processo em foreground de terminal? manter simples */
+        setpgid(0, 0);
+        signal(SIGTTOU, SIG_DFL);
+        signal(SIGTTIN, SIG_DFL);
         if (infile) {
             int fd = open(infile, O_RDONLY);
             if (fd < 0) { perror("open"); _exit(1); }
@@ -368,11 +407,13 @@ static void run_external(char **argv, char *infile, char *outfile, int append) {
         fprintf(stderr, "void-shell: %s: %s\n", argv[0], strerror(errno));
         _exit(127);
     }
+    setpgid(pid, pid);
+
     if (bg_current) {
         if (njobs < MAX_JOBS) {
             jobs[njobs].id = next_jobid++;
             jobs[njobs].pid = pid;
-            jobs[njobs].cmd = bg_cmd ? strdup(bg_cmd) : strdup("job");
+            jobs[njobs].cmd = bg_cmd ? strdup(bg_cmd) : strdup(argv[0]);
             jobs[njobs].running = 1;
             njobs++;
             printf("[%d] %d\n", jobs[njobs-1].id, pid);
@@ -380,10 +421,24 @@ static void run_external(char **argv, char *infile, char *outfile, int append) {
         last_status = 0;
         return;
     }
+    if (shell_terminal >= 0) tcsetpgrp(shell_terminal, pid);
     int status;
-    waitpid(pid, &status, 0);
-    if (WIFEXITED(status)) last_status = WEXITSTATUS(status);
-    else if (WIFSIGNALED(status)) last_status = 128 + WTERMSIG(status);
+    waitpid(pid, &status, WUNTRACED);
+    if (shell_terminal >= 0) tcsetpgrp(shell_terminal, shell_pgid);
+    if (WIFSTOPPED(status)) {
+        if (njobs < MAX_JOBS) {
+            jobs[njobs].id = next_jobid++;
+            jobs[njobs].pid = pid;
+            jobs[njobs].cmd = bg_cmd ? strdup(bg_cmd) : strdup(argv[0]);
+            jobs[njobs].running = 2;
+            njobs++;
+            printf("\n[%d]+  Stopped                 %s\n", jobs[njobs-1].id, jobs[njobs-1].cmd);
+        }
+        last_status = 128 + WSTOPSIG(status);
+    } else {
+        if (WIFEXITED(status)) last_status = WEXITSTATUS(status);
+        else if (WIFSIGNALED(status)) last_status = 128 + WTERMSIG(status);
+    }
 }
 
 static void run_pipeline(char *line) {
@@ -417,6 +472,10 @@ static void run_pipeline(char *line) {
             return;
         }
         if (pids[i] == 0) {
+            if (i == 0) setpgid(0, 0);
+            else setpgid(0, pids[0]);
+            signal(SIGTTOU, SIG_DFL);
+            signal(SIGTTIN, SIG_DFL);
             if (i > 0) dup2(pipes[i-1][0], STDIN_FILENO);
             if (i < ncmd - 1) dup2(pipes[i][1], STDOUT_FILENO);
             for (int j = 0; j < ncmd - 1; j++) {
@@ -441,6 +500,7 @@ static void run_pipeline(char *line) {
             fprintf(stderr, "void-shell: %s: %s\n", cmds[i].argv[0], strerror(errno));
             _exit(127);
         }
+        setpgid(pids[i], (i == 0 ? pids[i] : pids[0]));
     }
 
     for (int i = 0; i < ncmd - 1; i++) {
@@ -450,22 +510,34 @@ static void run_pipeline(char *line) {
     if (bg_current) {
         if (njobs < MAX_JOBS) {
             jobs[njobs].id = next_jobid++;
-            jobs[njobs].pid = pids[ncmd - 1];
+            jobs[njobs].pid = pids[0];
             jobs[njobs].cmd = bg_cmd ? strdup(bg_cmd) : strdup("pipeline");
             jobs[njobs].running = 1;
             njobs++;
-            printf("[%d] %d\n", jobs[njobs-1].id, pids[ncmd-1]);
+            printf("[%d] %d\n", jobs[njobs-1].id, pids[0]);
         }
         last_status = 0;
         return;
     }
+    if (shell_terminal >= 0) tcsetpgrp(shell_terminal, pids[0]);
+    int status = 0;
     for (int i = 0; i < ncmd; i++) {
-        int status;
-        waitpid(pids[i], &status, 0);
-        if (i == ncmd - 1) {
-            if (WIFEXITED(status)) last_status = WEXITSTATUS(status);
-            else if (WIFSIGNALED(status)) last_status = 128 + WTERMSIG(status);
+        waitpid(pids[i], &status, WUNTRACED);
+    }
+    if (shell_terminal >= 0) tcsetpgrp(shell_terminal, shell_pgid);
+    if (WIFSTOPPED(status)) {
+        if (njobs < MAX_JOBS) {
+            jobs[njobs].id = next_jobid++;
+            jobs[njobs].pid = pids[0];
+            jobs[njobs].cmd = bg_cmd ? strdup(bg_cmd) : strdup("pipeline");
+            jobs[njobs].running = 2;
+            njobs++;
+            printf("\n[%d]+  Stopped                 %s\n", jobs[njobs-1].id, jobs[njobs-1].cmd);
         }
+        last_status = 128 + WSTOPSIG(status);
+    } else {
+        if (WIFEXITED(status)) last_status = WEXITSTATUS(status);
+        else if (WIFSIGNALED(status)) last_status = 128 + WTERMSIG(status);
     }
 }
 
@@ -536,13 +608,31 @@ static void run_command_str(char *cmd) {
             }
             pid_t pid = fork();
             if (pid == 0) {
+                setpgid(0, 0);
+                signal(SIGTTOU, SIG_DFL);
+                signal(SIGTTIN, SIG_DFL);
                 run_line(inner);
                 exit(last_status);
             }
+            setpgid(pid, pid);
+            if (shell_terminal >= 0) tcsetpgrp(shell_terminal, pid);
             int status;
-            waitpid(pid, &status, 0);
-            if (WIFEXITED(status)) last_status = WEXITSTATUS(status);
-            else if (WIFSIGNALED(status)) last_status = 128 + WTERMSIG(status);
+            waitpid(pid, &status, WUNTRACED);
+            if (shell_terminal >= 0) tcsetpgrp(shell_terminal, shell_pgid);
+            if (WIFSTOPPED(status)) {
+                if (njobs < MAX_JOBS) {
+                    jobs[njobs].id = next_jobid++;
+                    jobs[njobs].pid = pid;
+                    jobs[njobs].cmd = strdup(inner);
+                    jobs[njobs].running = 2;
+                    njobs++;
+                    printf("\n[%d]+  Stopped                 %s\n", jobs[njobs-1].id, jobs[njobs-1].cmd);
+                }
+                last_status = 128 + WSTOPSIG(status);
+            } else {
+                if (WIFEXITED(status)) last_status = WEXITSTATUS(status);
+                else if (WIFSIGNALED(status)) last_status = 128 + WTERMSIG(status);
+            }
             free(inner);
             return;
         }
@@ -717,6 +807,14 @@ int main(void) {
     read_history(histfile);
     atexit(save_history);
     signal(SIGCHLD, sigchld_handler);
+    signal(SIGTTOU, SIG_IGN);
+    signal(SIGTTIN, SIG_IGN);
+    if (isatty(STDIN_FILENO)) {
+        shell_terminal = STDIN_FILENO;
+        setpgid(0, 0);
+        shell_pgid = getpid();
+        tcsetpgrp(shell_terminal, shell_pgid);
+    }
 
     for (;;) {
         char *input = readline("void-shell> ");
