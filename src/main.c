@@ -813,7 +813,7 @@ static void print_gradient(const char *s, int offset) {
         }
         printf("\033[38;2;%d;%d;%dm%c", r, g, b, s[i]);
     }
-    printf("\033[0m\033[K\n");
+    printf("\033[0m\n");
 }
 
 static void print_banner(void) {
@@ -877,8 +877,6 @@ static void save_history(void) {
     write_history(histfile);
 }
 
-static int anim_tick(void);
-
 int main(void) {
     const char *home = getenv("HOME");
     snprintf(histfile, sizeof(histfile), "%s/.void_shell_history", home ? home : ".");
@@ -896,8 +894,6 @@ int main(void) {
 
     print_banner();
 
-    rl_event_hook = anim_tick;
-    
     for (;;) {
         char *input = readline("\001\033[38;2;140;90;220m\002void-shell> \001\033[0m\002");
         if (!input) { /* EOF (Ctrl+D) */
@@ -913,49 +909,4 @@ int main(void) {
 
     return 0;
 }
-
-static int anim_tick(void) {
-    static struct timespec last = {0,0};
-    static int offset = 0;
-    struct timespec now;
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    if (last.tv_sec == 0 && last.tv_nsec == 0) { last = now; return 0; }
-    long ms = (now.tv_sec-last.tv_sec)*1000 + (now.tv_nsec-last.tv_nsec)/1000000;
-    if (ms < 100) return 0;
-    last = now;
-    offset++;
-
-    const char *galaxy[] = {
-        "                .  *  .  *  .  *  .  *",
-        "          .  *  .  *  .  *  .  *  .  *  .",
-        "      .  *  .  *  .  *  .  *  .  *  .  *  .",
-        "    .  *  .  *  .  *  .  *  .  *  .  *  .  *",
-        "  .  *  .  *  .  *  .  *  .  *  .  *  .  *  .",
-        " .  *  .  *  .  *  .  *  .  *  .  *  .  *  .  .",
-        ".  *  .  *  .  *  .  *  .  *  .  *  .  *  .  *  .",
-        " .  *  .  *  .  *  .  *  .  *  .  *  .  *  .  .",
-        "  .  *  .  *  .  *  .  *  .  *  .  *  .  *  .",
-        "    .  *  .  *  .  *  .  *  .  *  .  *  .  *",
-        "      .  *  .  *  .  *  .  *  .  *  .  *  .",
-        "          .  *  .  *  .  *  .  *  .  *  .",
-        "                .  *  .  *  .  *  .  *",
-        NULL
-    };
-
-    printf("\033[?25l");   // hide cursor
-    printf("\0337");          // save cursor
-    printf("\033[1;1H");    // line 1 col 1
-
-    for (int i = 0; galaxy[i]; i++) {
-        printf("\033[K");            // clear line
-        print_gradient(galaxy[i], offset + i * 3);
-        printf("\n");
-    }
-
-    printf("\0338");      // restore cursor
-    printf("\033[?25h");  // show cursor
-    fflush(stdout);
-    return 0;
-}
-
 
