@@ -13,12 +13,17 @@
 #include <glob.h>
 #include <time.h>
 #include <sys/ioctl.h>
+#include <poll.h>
+#include <termios.h>
+#include <strings.h>
 
 #define MAX_ARGS 64
 #define MAX_CMDS 16
 #define MAX_TOKEN 4096
 
 static void anim_clear_screen(void);
+static void anim_reapply_region(void);
+static void kalc_run(const char *start);
 
 static int last_status = 0;
 
@@ -723,6 +728,23 @@ static void trim_str(char *s) {
 }
 
 static void run_line(char *line) {
+    /* /kalc: mini manual interativo de matematica (menu + mouse) */
+    {
+        char *s = line;
+        while (*s == ' ' || *s == '\t') s++;
+        if (strncmp(s, "/kalc", 5) == 0 &&
+            (s[5] == '\0' || s[5] == ' ' || s[5] == '\t')) {
+            char *arg = s + 5;
+            while (*arg == ' ' || *arg == '\t') arg++;
+            int alen = (int)strlen(arg);
+            while (alen > 0 && (arg[alen - 1] == ' ' || arg[alen - 1] == '\t'))
+                arg[--alen] = '\0';
+            kalc_run(*arg ? arg : NULL);
+            anim_reapply_region();
+            last_status = 0;
+            return;
+        }
+    }
     char *cmds[MAX_CMDS];
     int ops[MAX_CMDS];
     int ncmd = 0;
@@ -901,6 +923,8 @@ static int anim_rows = 24;
 static int anim_cols = 80;
 static int anim_logo_live = 0;    /* banner pode ser redesenhado agora? */
 static int anim_logo_pinned = 0;  /* banner esta fixo acima da regiao? */
+static int anim_region_top = 2;   /* topo da regiao de rolagem atual */
+static int anim_prompt_row = 2;   /* linha onde o prompt comeca */
 static struct timespec anim_last;
 
 static void anim_read_size(void) {
@@ -986,6 +1010,8 @@ static void anim_render_all(void) {
 
     anim_logo_pinned = logo_pinned;
     anim_logo_live = 1;
+    anim_region_top = region_top;
+    anim_prompt_row = prompt_row;
 
     printf("\033[%d;%dr", region_top, rows);
     printf("\033[%d;1H", prompt_row);
@@ -1011,6 +1037,20 @@ static void anim_clear_screen(void) {
     anim_enabled = (anim_cols >= ANIM_MIN_COLS && anim_rows >= ANIM_MIN_ROWS);
     if (anim_enabled) anim_render_all();
     else anim_render_static();
+}
+
+/* Reaplica a regiao de rolagem sem limpar a tela (ex.: ao voltar do /kalc). */
+static void anim_reapply_region(void) {
+    if (!isatty(STDOUT_FILENO)) return;
+    int old_rows = anim_rows, old_cols = anim_cols;
+    anim_read_size();
+    if (anim_rows != old_rows || anim_cols != old_cols) {
+        anim_clear_screen();
+        return;
+    }
+    if (!anim_enabled) return;
+    printf("\033[%d;%dr", anim_region_top, anim_rows);
+    fflush(stdout);
 }
 
 static void anim_cleanup(void) {
@@ -1081,6 +1121,526 @@ static void print_banner(void) {
         struct timespec ts = {0, 80000000L};
         nanosleep(&ts, NULL);
     }
+}
+
+/* ================================================================== */
+/* /kalc - mini manual de matematica interativo (menu + mouse)        */
+/* ================================================================== */
+
+typedef struct {
+    const char *title;
+    const char *const *lines;
+    int nlines;
+} KalcTopic;
+
+static const char *const kalc_sum[] = {
+    "# O que é",
+    "Somar é juntar quantidades. O resultado é a soma ou total.",
+    "a + b = c, onde a e b são as parcelas e c é a soma.",
+    "",
+    "# Exemplos: do básico ao avançado",
+    "- 2 + 3 = 5",
+    "- 17 + 25 = 42",
+    "- 248 + 137 = 385",
+    "- 1/2 + 1/3 = 5/6  (frações: iguale os denominadores)",
+    "- 0,75 + 1,50 = 2,25  (alinhar as vírgulas)",
+    "- 7 + (-3) = 4  (somar negativo é subtrair)",
+    "",
+    "# Regras e propriedades",
+    "- Comutativa: a + b = b + a",
+    "- Associativa: (a + b) + c = a + (b + c)",
+    "- Elemento neutro: a + 0 = a",
+    "- Oposto: a + (-a) = 0",
+    "- Frações: a/b + c/d = (ad + cb) / bd",
+    "",
+    "# Macetes",
+    "- Some primeiro as dezenas e depois as unidades.",
+    "- Para somar 9, 19, 29...: some 10, 20, 30 e tire 1.",
+    "- Para 98, 97...: arredonde para 100 e compense.",
+    "- 1 + 2 + ... + n = n(n+1)/2.",
+    "- Pares que somam 10: 1+9, 2+8, 3+7, 4+6, 5+5.",
+    "",
+    "# Erros comuns",
+    "- Não alinhar as casas decimais.",
+    "- Somar numeradores e denominadores de frações direto.",
+    "- Trocar o sinal ao somar negativos.",
+};
+
+static const char *const kalc_sub[] = {
+    "# O que é",
+    "Subtrair é retirar uma quantidade de outra: a - b = c.",
+    "a é o minuendo, b o subtraendo e c a diferença.",
+    "",
+    "# Exemplos: do básico ao avançado",
+    "- 9 - 4 = 5",
+    "- 52 - 18 = 34",
+    "- 300 - 125 = 175",
+    "- 3/4 - 1/4 = 2/4 = 1/2",
+    "- 2,5 - 0,75 = 1,75",
+    "- 5 - (-3) = 8  (menos com menos vira mais)",
+    "- 10 - 25 = -15",
+    "",
+    "# Regras e propriedades",
+    "- Não é comutativa: a - b != b - a (em geral).",
+    "- Subtrair é somar o oposto: a - b = a + (-b).",
+    "- a - 0 = a  e  a - a = 0.",
+    "- Sinais: -(-x) = x  e  -(a + b) = -a - b.",
+    "- Frações: a/b - c/d = (ad - cb) / bd.",
+    "",
+    "# Macetes",
+    "- Para tirar 9: tire 10 e devolva 1.",
+    "- Para tirar 99: tire 100 e devolva 1.",
+    "- Complete a dezena: 63 - 47 = 63 - 50 + 3 = 16.",
+    "- Confira com a soma: se a - b = c, então c + b = a.",
+    "- Em dinheiro, pense no troco.",
+    "",
+    "# Erros comuns",
+    "- Inverter a ordem em perguntas de 'quanto falta'.",
+    "- Errar o sinal com parênteses.",
+    "- Não alinhar as vírgulas.",
+};
+
+static const char *const kalc_mul[] = {
+    "# O que é",
+    "Multiplicar é somar parcelas iguais: a x b = c.",
+    "3 x 4 = 3 + 3 + 3 + 3 = 12.",
+    "",
+    "# Exemplos: do básico ao avançado",
+    "- 6 x 7 = 42",
+    "- 12 x 15 = 180",
+    "- 25 x 4 = 100",
+    "- 1/2 x 1/3 = 1/6",
+    "- 0,5 x 0,2 = 0,10",
+    "- (-3) x 4 = -12",
+    "- (-3) x (-4) = 12",
+    "",
+    "# Regras e propriedades",
+    "- Comutativa: a x b = b x a",
+    "- Associativa: (a x b) x c = a x (b x c)",
+    "- Distributiva: a x (b + c) = ab + ac",
+    "- Neutro: a x 1 = a   |   Nulo: a x 0 = 0",
+    "- Sinais: (+)(+) = +, (-)(-) = +, (+)(-) = -",
+    "- Frações: (a/b) x (c/d) = ac/bd",
+    "",
+    "# Macetes",
+    "- Tabuada do 9: 9 x n = 10n - n.",
+    "- x5 = metade de x10; x25 = x100/4; x50 = x100/2.",
+    "- x11 (2 dígitos): 23 x 11 = 2 (2+3) 3 = 253.",
+    "- (a+b)(a-b) = a^2 - b^2.",
+    "- x4 = dobrar duas vezes.",
+    "",
+    "# Erros comuns",
+    "- Achar que (-)(-) dá negativo.",
+    "- Multiplicar numerador por denominador.",
+    "- Errar a vírgula: 0,2 x 0,3 = 0,06 (duas casas).",
+};
+
+static const char *const kalc_div[] = {
+    "# O que é",
+    "Dividir é repartir em partes iguais: a / b = c.",
+    "a é o dividendo, b o divisor e c o quociente.",
+    "O resto é o que sobra quando a divisão não é exata.",
+    "",
+    "# Exemplos: do básico ao avançado",
+    "- 12 / 3 = 4",
+    "- 45 / 5 = 9",
+    "- 100 / 8 = 12,5",
+    "- 7 / 2 = 3,5",
+    "- (1/2) / (1/4) = 2",
+    "- 10 / 0 = indefinido (não existe)",
+    "",
+    "# Regras e propriedades",
+    "- Não é comutativa: a / b != b / a.",
+    "- Dividir é multiplicar pelo inverso: a / b = a x (1/b).",
+    "- a / 1 = a   |   a / a = 1 (a != 0)   |   0 / a = 0.",
+    "- Sinais: (+)/(+) = +, (-)/(-) = +, (+)/(-) = -.",
+    "- Frações: (a/b) / (c/d) = (a/b) x (d/c).",
+    "- Com resto: a = bq + r, com 0 <= r < b.",
+    "",
+    "# Macetes",
+    "- /5 = x2 /10;  /25 = x4 /100;  /50 = x2 /100.",
+    "- Para dividir por 4: divida por 2 duas vezes.",
+    "- Divisibilidade: 3 (soma dos dígitos), 9 (idem),",
+    "  5 (termina em 0 ou 5), 2 (par).",
+    "- Estime arredondando e ajuste no final.",
+    "- Regra de três nada mais é que proporção.",
+    "",
+    "# Erros comuns",
+    "- Dividir por zero.",
+    "- Inverter dividendo e divisor.",
+    "- Esquecer o resto em divisões inteiras.",
+    "- Não inverter a fração de baixo.",
+};
+
+static const KalcTopic kalc_topics[] = {
+    { "Sum (soma)", kalc_sum, (int)(sizeof(kalc_sum) / sizeof(kalc_sum[0])) },
+    { "Subtract (subtração)", kalc_sub, (int)(sizeof(kalc_sub) / sizeof(kalc_sub[0])) },
+    { "Multiplication (multiplicação)", kalc_mul, (int)(sizeof(kalc_mul) / sizeof(kalc_mul[0])) },
+    { "Division (divisão)", kalc_div, (int)(sizeof(kalc_div) / sizeof(kalc_div[0])) },
+};
+#define KALC_NTOPICS ((int)(sizeof(kalc_topics) / sizeof(kalc_topics[0])))
+#define KALC_MENU_TOP 5
+#define KALC_MENU_QUIT (KALC_MENU_TOP + KALC_NTOPICS + 1)
+
+#define KALC_PURPLE "\033[38;2;180;130;255m"
+#define KALC_DIM    "\033[38;2;120;110;140m"
+#define KALC_SEL    "\033[48;2;70;40;120m\033[38;2;255;255;255m"
+#define KALC_RESET  "\033[0m"
+
+static int kalc_rows = 24;
+static int kalc_cols = 80;
+
+static void kalc_size(void) {
+    struct winsize ws;
+    kalc_rows = 24;
+    kalc_cols = 80;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0) {
+        if (ws.ws_row > 0) kalc_rows = ws.ws_row;
+        if (ws.ws_col > 0) kalc_cols = ws.ws_col;
+    }
+}
+
+static int kalc_find_topic(const char *s) {
+    if (!s) return -1;
+    if (s[0] >= '1' && s[0] < '1' + KALC_NTOPICS && s[1] == '\0')
+        return s[0] - '1';
+    if (strcasecmp(s, "sum") == 0 || strcasecmp(s, "soma") == 0) return 0;
+    if (strcasecmp(s, "sub") == 0 || strcasecmp(s, "subtract") == 0 ||
+        strcasecmp(s, "subtracao") == 0 || strcasecmp(s, "subtração") == 0) return 1;
+    if (strcasecmp(s, "mul") == 0 || strcasecmp(s, "mult") == 0 ||
+        strcasecmp(s, "multiplication") == 0 ||
+        strcasecmp(s, "multiplicacao") == 0 || strcasecmp(s, "multiplicação") == 0) return 2;
+    if (strcasecmp(s, "div") == 0 || strcasecmp(s, "division") == 0 ||
+        strcasecmp(s, "divisao") == 0 || strcasecmp(s, "divisão") == 0) return 3;
+    return -1;
+}
+
+/* Impressao simples para quando nao ha terminal interativo. */
+static void kalc_print_plain(const char *start) {
+    int idx = kalc_find_topic(start);
+    if (idx >= 0) {
+        const KalcTopic *t = &kalc_topics[idx];
+        printf("%s\n", t->title);
+        for (int i = 0; i < t->nlines; i++) {
+            const char *l = t->lines[i];
+            if (l[0] == '#' && l[1] == ' ') printf("\n%s\n", l + 2);
+            else if (l[0] == '-' && l[1] == ' ') printf("  - %s\n", l + 2);
+            else printf("%s\n", l);
+        }
+        return;
+    }
+    printf("KALC :: matemática básica\n");
+    for (int i = 0; i < KALC_NTOPICS; i++)
+        printf("  [%d] %s\n", i + 1, kalc_topics[i].title);
+    printf("\nUse /kalc <topico> para abrir direto (ex.: /kalc sum).\n");
+}
+
+static void kalc_render_menu(int sel) {
+    kalc_size();
+    printf("\033[?2026h\033[2J\033[H");
+    printf("\033[2;3H%sKALC :: matemática básica%s", KALC_PURPLE, KALC_RESET);
+    printf("\033[3;3H%s-------------------------%s", KALC_DIM, KALC_RESET);
+    for (int i = 0; i < KALC_NTOPICS; i++) {
+        printf("\033[%d;3H", KALC_MENU_TOP + i);
+        if (i == sel)
+            printf("%s > [%d]  %s %s", KALC_SEL, i + 1, kalc_topics[i].title, KALC_RESET);
+        else
+            printf("   [%d]  %s", i + 1, kalc_topics[i].title);
+    }
+    printf("\033[%d;3H", KALC_MENU_QUIT);
+    if (sel == KALC_NTOPICS)
+        printf("%s > [q]  Sair %s", KALC_SEL, KALC_RESET);
+    else
+        printf("   [q]  Sair");
+    printf("\033[%d;3H%sClique em um tópico, ou use ↑/↓ + Enter.%s",
+           KALC_MENU_QUIT + 2, KALC_DIM, KALC_RESET);
+    printf("\033[?2026l");
+    fflush(stdout);
+}
+
+/* Copia no maximo maxw caracteres (largura), sem cortar UTF-8. */
+static const char *kalc_fit(const char *line, char *buf, size_t bufsz, int maxw) {
+    size_t i = 0;
+    int w = 0;
+    while (line[i]) {
+        unsigned char c = (unsigned char)line[i];
+        int len = 1;
+        if ((c & 0xE0) == 0xC0) len = 2;
+        else if ((c & 0xF0) == 0xE0) len = 3;
+        else if ((c & 0xF8) == 0xF0) len = 4;
+        if (w + 1 > maxw || i + (size_t)len >= bufsz) break;
+        memcpy(buf + i, line + i, (size_t)len);
+        i += (size_t)len;
+        w++;
+    }
+    buf[i] = '\0';
+    return buf;
+}
+
+/* Retorna o scroll ja limitado ao conteudo. */
+static int kalc_render_topic(int idx, int scroll) {
+    kalc_size();
+    int rows = kalc_rows;
+    const KalcTopic *t = &kalc_topics[idx];
+    int body_top = 4;
+    int body_rows = rows - body_top;
+    if (body_rows < 1) body_rows = 1;
+    int max_scroll = t->nlines - body_rows;
+    if (max_scroll < 0) max_scroll = 0;
+    if (scroll > max_scroll) scroll = max_scroll;
+    if (scroll < 0) scroll = 0;
+
+    printf("\033[?2026h\033[2J\033[H");
+    printf("\033[1;3H%s%s%s", KALC_PURPLE, t->title, KALC_RESET);
+    printf("\033[2;3H%s-------------------------%s", KALC_DIM, KALC_RESET);
+    int avail = kalc_cols - 4;
+    if (avail < 1) avail = 1;
+    for (int i = 0; i < body_rows; i++) {
+        int li = scroll + i;
+        if (li >= t->nlines) break;
+        printf("\033[%d;3H", body_top + i);
+        const char *raw = t->lines[li];
+        int extra = (raw[0] == '-' && raw[1] == ' ') ? 2 : 0;
+        char fit[512];
+        const char *line = kalc_fit(raw, fit, sizeof(fit), avail - extra);
+        if (line[0] == '#' && line[1] == ' ') {
+            printf("%s%s%s", KALC_PURPLE, line + 2, KALC_RESET);
+        } else if (line[0] == '-' && line[1] == ' ') {
+            printf("%s•%s %s", KALC_PURPLE, KALC_RESET, line + 2);
+        } else {
+            printf("%s", line);
+        }
+    }
+    printf("\033[%d;3H%s[<] Voltar%s   ↑/↓ rolar   q voltar   %d/%d",
+           rows, KALC_DIM, KALC_RESET, scroll + 1, max_scroll + 1);
+    printf("\033[?2026l");
+    fflush(stdout);
+    return scroll;
+}
+
+enum {
+    K_NONE = 0, K_CHAR, K_UP, K_DOWN, K_LEFT, K_RIGHT,
+    K_PGUP, K_PGDN, K_HOME, K_END, K_ENTER, K_ESC, K_MOUSE
+};
+
+typedef struct {
+    int type;
+    int ch;
+    int mx, my;
+    int mb;
+    int press;
+} KalcKey;
+
+static int kalc_getc(int timeout_ms) {
+    struct pollfd p;
+    p.fd = STDIN_FILENO;
+    p.events = POLLIN;
+    p.revents = 0;
+    int r;
+    do {
+        r = poll(&p, 1, timeout_ms);
+    } while (r < 0 && errno == EINTR);
+    if (r <= 0) return -1;
+    unsigned char c;
+    if (read(STDIN_FILENO, &c, 1) != 1) return -1;
+    return c;
+}
+
+static int kalc_read_key(KalcKey *k, int timeout_ms) {
+    memset(k, 0, sizeof(*k));
+    int c = kalc_getc(timeout_ms);
+    if (c < 0) return 0;
+    if (c == '\r' || c == '\n') { k->type = K_ENTER; return 1; }
+    if (c != 27) { k->type = K_CHAR; k->ch = c; return 1; }
+
+    int c2 = kalc_getc(30);
+    if (c2 < 0) { k->type = K_ESC; return 1; }
+    if (c2 != '[') { k->type = K_ESC; return 1; }
+
+    char seq[64];
+    int n = 0;
+    while (n < (int)sizeof(seq) - 1) {
+        int d = kalc_getc(30);
+        if (d < 0) break;
+        seq[n++] = (char)d;
+        if ((d >= 'A' && d <= 'Z') || (d >= 'a' && d <= 'z') || d == '~') break;
+    }
+    seq[n] = '\0';
+
+    if (n == 1) {
+        switch (seq[0]) {
+            case 'A': k->type = K_UP; return 1;
+            case 'B': k->type = K_DOWN; return 1;
+            case 'C': k->type = K_RIGHT; return 1;
+            case 'D': k->type = K_LEFT; return 1;
+            case 'H': k->type = K_HOME; return 1;
+            case 'F': k->type = K_END; return 1;
+        }
+    }
+    if (strcmp(seq, "5~") == 0) { k->type = K_PGUP; return 1; }
+    if (strcmp(seq, "6~") == 0) { k->type = K_PGDN; return 1; }
+    if (seq[0] == '<') {
+        int b, x, y;
+        char term;
+        if (sscanf(seq, "<%d;%d;%d%c", &b, &x, &y, &term) == 4) {
+            k->type = K_MOUSE;
+            k->mb = b;
+            k->mx = x;
+            k->my = y;
+            k->press = (term == 'M');
+            return 1;
+        }
+    }
+    k->type = K_ESC;
+    return 1;
+}
+
+static void kalc_run(const char *start) {
+    if (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO)) {
+        kalc_print_plain(start);
+        return;
+    }
+
+    struct termios orig, raw;
+    if (tcgetattr(STDIN_FILENO, &orig) != 0) return;
+    raw = orig;
+    raw.c_lflag &= ~(ICANON | ECHO | ISIG);
+    raw.c_iflag &= ~(IXON | ICRNL);
+    raw.c_cc[VMIN] = 1;
+    raw.c_cc[VTIME] = 0;
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+
+    printf("\033[?1049h\033[r\033[2J\033[H\033[?25l\033[?1000h\033[?1006h");
+    fflush(stdout);
+
+    int mode = 0;      /* 0 = menu, 1 = topico */
+    int sel = 0;
+    int topic = 0;
+    int scroll = 0;
+    int idx = kalc_find_topic(start);
+    if (idx >= 0) { mode = 1; topic = idx; }
+
+    kalc_size();
+    int last_rows = kalc_rows, last_cols = kalc_cols;
+    if (mode == 0) kalc_render_menu(sel);
+    else scroll = kalc_render_topic(topic, scroll);
+
+    int running = 1;
+    while (running) {
+        KalcKey k;
+        int got = kalc_read_key(&k, 200);
+
+        kalc_size();
+        if (kalc_rows != last_rows || kalc_cols != last_cols) {
+            last_rows = kalc_rows;
+            last_cols = kalc_cols;
+            if (mode == 0) kalc_render_menu(sel);
+            else scroll = kalc_render_topic(topic, scroll);
+        }
+        if (!got) continue;
+
+        if (mode == 0) {
+            switch (k.type) {
+                case K_CHAR:
+                    if (k.ch == 'q' || k.ch == 'Q' || k.ch == 3) {
+                        running = 0;
+                    } else if (k.ch >= '1' && k.ch < '1' + KALC_NTOPICS) {
+                        topic = k.ch - '1';
+                        mode = 1;
+                        scroll = 0;
+                        scroll = kalc_render_topic(topic, scroll);
+                    }
+                    break;
+                case K_UP:
+                    sel = (sel + KALC_NTOPICS) % (KALC_NTOPICS + 1);
+                    kalc_render_menu(sel);
+                    break;
+                case K_DOWN:
+                    sel = (sel + 1) % (KALC_NTOPICS + 1);
+                    kalc_render_menu(sel);
+                    break;
+                case K_ENTER:
+                    if (sel < KALC_NTOPICS) {
+                        topic = sel;
+                        mode = 1;
+                        scroll = 0;
+                        scroll = kalc_render_topic(topic, scroll);
+                    } else {
+                        running = 0;
+                    }
+                    break;
+                case K_ESC:
+                    running = 0;
+                    break;
+                case K_MOUSE:
+                    if (k.press && k.mb == 0) {
+                        if (k.my >= KALC_MENU_TOP && k.my < KALC_MENU_TOP + KALC_NTOPICS) {
+                            topic = k.my - KALC_MENU_TOP;
+                            mode = 1;
+                            scroll = 0;
+                            scroll = kalc_render_topic(topic, scroll);
+                        } else if (k.my == KALC_MENU_QUIT) {
+                            running = 0;
+                        }
+                    }
+                    break;
+            }
+        } else {
+            int body_rows = kalc_rows - 4;
+            if (body_rows < 1) body_rows = 1;
+            switch (k.type) {
+                case K_CHAR:
+                    if (k.ch == 'q' || k.ch == 'Q' || k.ch == 3 ||
+                        k.ch == 8 || k.ch == 127) {
+                        mode = 0;
+                        kalc_render_menu(sel);
+                    } else if (k.ch == 'j') {
+                        scroll = kalc_render_topic(topic, scroll + 1);
+                    } else if (k.ch == 'k') {
+                        scroll = kalc_render_topic(topic, scroll - 1);
+                    }
+                    break;
+                case K_UP:
+                    scroll = kalc_render_topic(topic, scroll - 1);
+                    break;
+                case K_DOWN:
+                    scroll = kalc_render_topic(topic, scroll + 1);
+                    break;
+                case K_PGUP:
+                    scroll = kalc_render_topic(topic, scroll - body_rows);
+                    break;
+                case K_PGDN:
+                    scroll = kalc_render_topic(topic, scroll + body_rows);
+                    break;
+                case K_HOME:
+                    scroll = kalc_render_topic(topic, 0);
+                    break;
+                case K_END:
+                    scroll = kalc_render_topic(topic, 1 << 20);
+                    break;
+                case K_ESC:
+                    mode = 0;
+                    kalc_render_menu(sel);
+                    break;
+                case K_MOUSE:
+                    if (k.press) {
+                        if (k.mb == 0 && k.my == kalc_rows) {
+                            mode = 0;
+                            kalc_render_menu(sel);
+                        } else if (k.mb == 64) {
+                            scroll = kalc_render_topic(topic, scroll - 3);
+                        } else if (k.mb == 65) {
+                            scroll = kalc_render_topic(topic, scroll + 3);
+                        }
+                    }
+                    break;
+            }
+        }
+    }
+
+    printf("\033[?1006l\033[?1000l\033[?25h\033[0m\033[?1049l");
+    fflush(stdout);
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig);
 }
 
 static void save_history(void) {

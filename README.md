@@ -18,6 +18,8 @@ aprender sistemas operacionais e programação de baixo nível.
 - Globbing: `*`, `?`, `[...]`
 - Expansão de `~`
 - Galáxia e banner animados no topo (região de rolagem própria, sem conflitar com o readline)
+- `/kalc`: mini manual interativo de matemática (soma, subtração,
+  multiplicação e divisão), com menu clicável e navegação por teclado
 
 ## Build
 
