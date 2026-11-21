@@ -823,13 +823,13 @@ static const char *const galaxy_lines[13] = {
 };
 
 static const char *const logo_lines[7] = {
-    ":::     :::  ::::::::  ::::::::::: :::::::::                   ::::::::  :::    ::: :::::::::: :::        :::        ",
-    ":+:     :+: :+:    :+:     :+:     :+:    :+:                 :+:    :+: :+:    :+: :+:        :+:        :+:        ",
-    "+:+     +:+ +:+    +:+     +:+     +:+    +:+                 +:+        +:+    +:+ +:+        +:+        +:+        ",
-    "+#+     +:+ +#+    +:+     +#+     +#+    +:+  +#++:++#++:++  +#++:++#++ +#++:++#++ +#++:++#   +#+        +#+        ",
-    " +#+   +#+  +#+    +#+     +#+     +#+    +#+                        +#+ +#+    +#+ +#+        +#+        +#+        ",
-    "  #+#+#+#   #+#    #+#     #+#     #+#    #+#                 #+#    #+# #+#    #+# #+#        #+#        #+#        ",
-    "    ###      ########  ########### #########                   ########  ###    ### ########## ########## ##########  ",
+    "`7MMF'   `7MF'            db       `7MM       .M\"\"\"bgd `7MM                 `7MM  `7MM  ",
+    "  `MA     ,V                         MM      ,MI    \"Y   MM                   MM    MM  ",
+    "   VM:   ,V    ,pW\"Wq.  `7MM    ,M\"\"bMM      `MMb.       MMpMMMb.   .gP\"Ya    MM    MM  ",
+    "    MM.  M'   6W'   `Wb   MM  ,AP    MM        `YMMNq.   MM    MM  ,M'   Yb   MM    MM  ",
+    "    `MM A'    8M     M8   MM  8MI    MM      .     `MM   MM    MM  8M\"\"\"\"\"\"   MM    MM  ",
+    "     :MM;     YA.   ,A9   MM  `Mb    MM      Mb     dM   MM    MM  YM.    ,   MM    MM  ",
+    "      VF       `Ybmd9'  .JMML. `Wbmd\"MML.    P\"Ybmmd\"  .JMML  JMML. `Mbmmd' .JMML..JMML.",
 };
 
 static void print_gradient_raw(const char *s, int offset) {
