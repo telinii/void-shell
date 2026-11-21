@@ -15,6 +15,9 @@ aprender sistemas operacionais e programação de baixo nível.
 - Sequência e condicionais: `;`, `&&`, `||`
 - Background: `comando &`, `jobs`, `fg`
 - Histórico persistente com setas e Tab (readline)
+- Sugestões inline estilo fish: texto cinza completa o comando a partir do
+  histórico, comandos internos, atalhos e executáveis do `PATH`; **→**
+  aceita a sugestão
 - Globbing: `*`, `?`, `[...]`
 - Expansão de `~`
 - Galáxia e banner animados no topo (região de rolagem própria, sem conflitar com o readline)

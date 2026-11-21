@@ -163,6 +163,9 @@ static int theme_apply(int idx) {
 
 static void anim_clear_screen(void);
 static void anim_reapply_region(void);
+static void sugg_forget(void);
+static void suggestion_erase(void);
+static void redisplay_now(void);
 static void kalc_run(const char *start);
 static int lang_run(const char *start);
 static void lang_load(void);
@@ -174,6 +177,18 @@ static void hud_draw(void);
 static void hud_tick(void);
 static void hud_cpu_update(void);
 static void hud_mem_update(void);
+
+/* Sugestoes inline: estado compartilhado com a animacao e o readline. */
+#define SUGG_TEXT_MAX 1024
+#define SUGG_CMD_MAX  9000
+#define SUGG_PROMPT_W 12   /* largura visivel de "void-shell> " */
+
+static char sugg_text[SUGG_TEXT_MAX];
+static int  sugg_active = 0;
+static int  sugg_drawn = 0;
+static char *sugg_cmds[SUGG_CMD_MAX];
+static int   sugg_ncmds = 0;
+static int   sugg_cmds_loaded = 0;
 
 static int last_status = 0;
 static long last_duration_ms = -1;
@@ -1190,6 +1205,7 @@ static void anim_draw_stars(int offset) {
 /* Render estatico: sem regiao de rolagem e sem animacao. */
 static void anim_render_static(void) {
     int rows = anim_rows, cols = anim_cols;
+    sugg_forget();
     anim_logo_live = 0;
     anim_logo_pinned = 0;
     hud_enabled = 0;
@@ -1210,6 +1226,7 @@ static void anim_render_static(void) {
 /* Render completo: galaxia fixa no topo + banner + regiao de rolagem. */
 static void anim_render_all(void) {
     int rows = anim_rows, cols = anim_cols;
+    sugg_forget();
     int banner_top = ANIM_HEADER_ROWS + 1;
     int bh = block_height(logo_lines, 7, cols);
     int banner_end = banner_top + bh;
@@ -1322,11 +1339,12 @@ static int anim_tick(void) {
         } else {
             anim_enabled = 0;
             hud_enabled = 0;
+            sugg_forget();
             printf("\033[r\033[%d;1H\033[K", anim_rows > 0 ? anim_rows : 24);
             fflush(stdout);
         }
         rl_on_new_line();
-        rl_redisplay();
+        redisplay_now();
         return 0;
     }
     if (!anim_enabled) return 0;
@@ -1356,7 +1374,7 @@ static int anim_clear_key(int count, int key) {
     (void)count; (void)key;
     anim_clear_screen();
     rl_on_new_line();
-    rl_redisplay();
+    redisplay_now();
     return 0;
 }
 
@@ -2071,6 +2089,8 @@ static void print_tutorial(void) {
            tr("leave the shell (Ctrl+D)", "sai do shell (Ctrl+D)"), R);
     printf("  %s↑/↓%s        %s%s%s\n", C, R, T,
            tr("history    Tab  completion", "histórico    Tab  completar"), R);
+    printf("  %s→%s          %s%s%s\n", C, R, T,
+           tr("accept the gray suggestion", "aceita a sugestão cinza"), R);
     printf("  %s/tutorial%s  %s%s%s\n", C, R, T,
            tr("show this guide again", "mostra este guia de novo"), R);
     fflush(stdout);
@@ -2823,7 +2843,7 @@ static void pal_add_path(void) {
 
 static void pal_collect(void) {
     static const char *const builtins[] = {
-        "cd", "pwd", "exit", "clear", "jobs", "fg", "bg", "export",
+        "cd", "pwd", "exit", "echo", "clear", "jobs", "fg", "bg", "export",
     };
     static const char *const slashes[] = {
         "/kalc", "/lang", "/theme", "/tutorial", "/help",
@@ -3098,6 +3118,7 @@ static int pal_open(void) {
 
 static int palette_key(int count, int key) {
     (void)count; (void)key;
+    suggestion_erase();
     int action = pal_open();
     if (action == 1 || action == 2) {
         rl_replace_line(pal_result, 0);
@@ -3109,8 +3130,221 @@ static int palette_key(int count, int key) {
     } else {
         rl_on_new_line();
     }
-    rl_redisplay();
+    redisplay_now();
+    if (action == 1) rl_crlf();
     return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Sugestoes inline (estilo fish)                                      */
+/* ------------------------------------------------------------------ */
+
+/* Esquece a sugestao sem tocar na tela (a tela sera limpa/redesenhada). */
+static void sugg_forget(void) {
+    sugg_active = 0;
+    sugg_drawn = 0;
+}
+
+static void sugg_set(const char *cand, size_t len) {
+    if (!cand) return;
+    size_t n = strlen(cand + len);
+    if (n == 0 || n >= sizeof(sugg_text)) return;
+    memcpy(sugg_text, cand + len, n + 1);
+    sugg_active = 1;
+}
+
+/* Carrega os executaveis do PATH uma unica vez, para sugestoes de comando. */
+static void sugg_load_path(void) {
+    if (sugg_cmds_loaded) return;
+    sugg_cmds_loaded = 1;
+    const char *path = getenv("PATH");
+    if (!path) return;
+    char *copy = strdup(path);
+    if (!copy) return;
+    char *save = NULL;
+    for (char *dir = strtok_r(copy, ":", &save); dir && sugg_ncmds < SUGG_CMD_MAX;
+         dir = strtok_r(NULL, ":", &save)) {
+        DIR *d = opendir(*dir ? dir : ".");
+        if (!d) continue;
+        struct dirent *e;
+        while ((e = readdir(d)) != NULL && sugg_ncmds < SUGG_CMD_MAX) {
+            if (e->d_name[0] == '.') continue;
+            char full[PATH_MAX];
+            snprintf(full, sizeof(full), "%s/%s", *dir ? dir : ".", e->d_name);
+            struct stat st;
+            if (stat(full, &st) != 0) continue;
+            if (!S_ISREG(st.st_mode) || (st.st_mode & 0111) == 0) continue;
+            sugg_cmds[sugg_ncmds] = strdup(e->d_name);
+            if (sugg_cmds[sugg_ncmds]) sugg_ncmds++;
+        }
+        closedir(d);
+    }
+    free(copy);
+}
+
+static void sugg_free_path(void) {
+    for (int i = 0; i < sugg_ncmds; i++) free(sugg_cmds[i]);
+    sugg_ncmds = 0;
+    sugg_cmds_loaded = 0;
+}
+
+static void suggestion_compute(void) {
+    sugg_active = 0;
+    if (!rl_line_buffer || rl_point != rl_end || rl_end <= 0) return;
+    if (rl_done) return;
+    if (!rl_display_prompt || !strstr(rl_display_prompt, "void-shell>")) return;
+
+    const char *line = rl_line_buffer;
+    size_t len = (size_t)rl_end;
+    int has_space = strpbrk(line, " \t") != NULL;
+
+    /* 1. historico: entrada mais recente que seja prefixo da linha. */
+    HIST_ENTRY **h = history_list();
+    if (h) {
+        for (int i = history_length - 1; i >= 0; i--) {
+            const char *cand = h[i] ? h[i]->line : NULL;
+            if (!cand) continue;
+            size_t clen = strlen(cand);
+            if (clen <= len) continue;
+            /* Sem espaco ainda: prefere completar so o nome do comando. */
+            if (!has_space && strpbrk(cand, " \t")) continue;
+            if (strncmp(cand, line, len) != 0) continue;
+            sugg_set(cand, len);
+            return;
+        }
+    }
+
+    if (!has_space) {
+        /* 2. comandos internos com barra. */
+        if (line[0] == '/') {
+            static const char *const slashes[] = {
+                "/kalc", "/lang", "/theme", "/tutorial", "/help",
+            };
+            for (int i = 0; i < (int)(sizeof(slashes) / sizeof(slashes[0])); i++) {
+                if (strncmp(slashes[i], line, len) != 0) continue;
+                if (strlen(slashes[i]) == len) return;   /* ja esta completo */
+                sugg_set(slashes[i], len);
+                return;
+            }
+        }
+        /* 3. builtins. */
+        static const char *const builtins[] = {
+            "cd", "pwd", "exit", "echo", "clear", "jobs", "fg", "bg",
+            "export",
+        };
+        for (int i = 0; i < (int)(sizeof(builtins) / sizeof(builtins[0])); i++) {
+            if (strncmp(builtins[i], line, len) != 0) continue;
+            if (strlen(builtins[i]) == len) return;   /* ja esta completo */
+            sugg_set(builtins[i], len);
+            return;
+        }
+        /* 4. comandos comuns (ordem de preferencia). */
+        static const char *const common[] = {
+            "git", "docker", "python3", "node", "npm", "gcc", "make",
+            "cargo", "go", "java", "curl", "wget", "ssh", "tmux", "vim",
+            "nvim", "code", "ls", "less", "grep", "find", "cat", "man",
+            "ps", "top", "htop", "df", "du", "date", "cal", "bc", "tar",
+            "zip", "unzip", "sed", "awk", "sort", "uniq", "head", "tail",
+            "wc", "chmod", "chown", "mkdir", "rm", "cp", "mv", "touch",
+            "ln", "file", "stat", "which", "whereis", "uname", "free",
+            "kill", "pkill",
+        };
+        for (int i = 0; i < (int)(sizeof(common) / sizeof(common[0])); i++) {
+            if (strncmp(common[i], line, len) != 0) continue;
+            if (strlen(common[i]) == len) return;   /* ja esta completo */
+            sugg_set(common[i], len);
+            return;
+        }
+        /* 5. executaveis do PATH (so para o nome do comando). */
+        if (!strpbrk(line, "/.~")) {
+            sugg_load_path();
+            int best = -1, exact = 0;
+            size_t best_len = (size_t)-1;
+            for (int i = 0; i < sugg_ncmds; i++) {
+                const char *cand = sugg_cmds[i];
+                size_t clen = strlen(cand);
+                if (clen < len || strncmp(cand, line, len) != 0) continue;
+                if (clen == len) { exact = 1; break; }
+                if (clen < best_len) { best = i; best_len = clen; }
+            }
+            if (exact) return;   /* ja existe um comando com esse nome */
+            if (best >= 0) { sugg_set(sugg_cmds[best], len); return; }
+        }
+    } else {
+        /* 5. atalhos prontos com argumentos. */
+        static const char *const snippets[] = {
+            "git status", "git log --oneline", "git diff", "git add .",
+            "git commit -m \"\"", "git push", "git pull", "git switch -c ",
+            "ls -la", "find . -name ", "grep -rn ",
+        };
+        for (int i = 0; i < (int)(sizeof(snippets) / sizeof(snippets[0])); i++) {
+            if (strncmp(snippets[i], line, len) == 0 &&
+                strlen(snippets[i]) > len) {
+                sugg_set(snippets[i], len);
+                return;
+            }
+        }
+    }
+}
+
+static void suggestion_erase(void) {
+    if (sugg_drawn) {
+        printf("\033[K");
+        fflush(stdout);
+        sugg_drawn = 0;
+    }
+    sugg_active = 0;
+}
+
+static void suggestion_draw(void) {
+    if (!sugg_active || !sugg_text[0]) return;
+    int rows = 0, cols = 0;
+    rl_get_screen_size(&rows, &cols);
+    (void)rows;
+    if (cols <= 0) return;
+    int col = (SUGG_PROMPT_W + rl_end) % cols;
+    int avail = cols - col - 1;
+    if (avail <= 0) return;
+    size_t n = strlen(sugg_text);
+    if ((int)n > avail) n = (size_t)avail;
+    if (n == 0) return;
+    printf("\033[s%s%.*s%s\033[u", theme_dim, (int)n, sugg_text, theme_text);
+    fflush(stdout);
+    sugg_drawn = 1;
+}
+
+static void suggestion_redisplay(void) {
+    suggestion_erase();
+    rl_redisplay();
+    if (rl_done) return;
+    suggestion_compute();
+    suggestion_draw();
+}
+
+static void redisplay_now(void) {
+    if (rl_redisplay_function) (*rl_redisplay_function)();
+    else rl_redisplay();
+}
+
+/* Seta direita: aceita a sugestao; se nao houver, anda um caractere. */
+static int suggestion_accept(int count, int key) {
+    if (rl_point == rl_end && rl_end > 0) {
+        suggestion_compute();
+        if (sugg_active) {
+            suggestion_erase();
+            rl_insert_text(sugg_text);
+            sugg_active = 0;
+            redisplay_now();
+            return 0;
+        }
+    }
+    return rl_forward_char(count, key);
+}
+
+/* Enter/Ctrl+J: apaga o fantasma antes de aceitar a linha. */
+static int suggestion_newline(int count, int key) {
+    suggestion_erase();
+    return rl_newline(count, key);
 }
 
 static void save_history(void) {
@@ -3137,10 +3371,19 @@ int main(void) {
     print_banner();
     anim_setup();
     if (isatty(STDOUT_FILENO)) print_tutorial();
+    rl_initialize();
     rl_set_keyboard_input_timeout(80000);
     rl_event_hook = anim_tick;
     rl_add_defun("void-clear-screen", anim_clear_key, '\x0c');
     rl_add_defun("void-command-palette", palette_key, 16);
+    rl_redisplay_function = suggestion_redisplay;
+    rl_add_defun("void-accept-suggestion", suggestion_accept, -1);
+    rl_bind_keyseq("\\e[C", suggestion_accept);
+    rl_bind_keyseq("\\eOC", suggestion_accept);
+    rl_bind_key('\r', suggestion_newline);
+    rl_bind_key('\n', suggestion_newline);
+    rl_bind_keyseq("\\eOM", suggestion_newline);   /* Enter do teclado numerico */
+    atexit(sugg_free_path);
     atexit(anim_cleanup);
 
     for (;;) {
@@ -3152,6 +3395,7 @@ int main(void) {
             } else {
                 anim_enabled = 0;
                 hud_enabled = 0;
+                sugg_forget();
                 printf("\033[r\033[%d;1H\033[K", anim_rows > 0 ? anim_rows : 24);
                 fflush(stdout);
             }
