@@ -1,0 +1,4 @@
+build/
+void-shell
+*.o
+minishell
