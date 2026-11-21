@@ -11,6 +11,7 @@
 #include <readline/history.h>
 #include <signal.h>
 #include <glob.h>
+#include <time.h>
 
 #define MAX_ARGS 64
 #define MAX_CMDS 16
@@ -797,10 +798,11 @@ static void run_line(char *line) {
 
 static char histfile[4096];
 
-static void print_gradient(const char *s) {
+static void print_gradient(const char *s, int offset) {
     int len = strlen(s);
     for (int i = 0; i < len; i++) {
-        int seg = (len > 1) ? (i * 5 / len) : 0;
+        int pos = (i + offset) % (len > 0 ? len : 1);
+        int seg = (len > 1) ? (pos * 5 / len) : 0;
         int r, g, b;
         switch (seg) {
             case 0: r = 255; g = 255; b = 255; break; /* branco */
@@ -816,28 +818,58 @@ static void print_gradient(const char *s) {
 
 static void print_banner(void) {
     if (!isatty(STDOUT_FILENO)) return;
-    /* logo: galaxia (vazio estrelado) */
-    print_gradient("                .  *  .  *  .  *  .  *");
-    print_gradient("          .  *  .  *  .  *  .  *  .  *  .");
-    print_gradient("      .  *  .  *  .  *  .  *  .  *  .  *  .");
-    print_gradient("    .  *  .  *  .  *  .  *  .  *  .  *  .  *");
-    print_gradient("  .  *  .  *  .  *  .  *  .  *  .  *  .  *  .");
-    print_gradient(" .  *  .  *  .  *  .  *  .  *  .  *  .  *  .  .");
-    print_gradient(".  *  .  *  .  *  .  *  .  *  .  *  .  *  .  *  .");
-    print_gradient(" .  *  .  *  .  *  .  *  .  *  .  *  .  *  .  .");
-    print_gradient("  .  *  .  *  .  *  .  *  .  *  .  *  .  *  .");
-    print_gradient("    .  *  .  *  .  *  .  *  .  *  .  *  .  *");
-    print_gradient("      .  *  .  *  .  *  .  *  .  *  .  *  .");
-    print_gradient("          .  *  .  *  .  *  .  *  .  *  .");
-    print_gradient("                .  *  .  *  .  *  .  *");
+    for (int frame = 0; frame < 12; frame++) {
+        printf("\033[2J\033[H");
+        int off = frame * 3;
+        print_gradient("                .  *  .  *  .  *  .  *", off);
+        print_gradient("          .  *  .  *  .  *  .  *  .  *  .", off);
+        print_gradient("      .  *  .  *  .  *  .  *  .  *  .  *  .", off);
+        print_gradient("    .  *  .  *  .  *  .  *  .  *  .  *  .  *", off);
+        print_gradient("  .  *  .  *  .  *  .  *  .  *  .  *  .  *  .", off);
+        print_gradient(" .  *  .  *  .  *  .  *  .  *  .  *  .  *  .  .", off);
+        print_gradient(".  *  .  *  .  *  .  *  .  *  .  *  .  *  .  *  .", off);
+        print_gradient(" .  *  .  *  .  *  .  *  .  *  .  *  .  *  .  .", off);
+        print_gradient("  .  *  .  *  .  *  .  *  .  *  .  *  .  *  .", off);
+        print_gradient("    .  *  .  *  .  *  .  *  .  *  .  *  .  *", off);
+        print_gradient("      .  *  .  *  .  *  .  *  .  *  .  *  .", off);
+        print_gradient("          .  *  .  *  .  *  .  *  .  *  .", off);
+        print_gradient("                .  *  .  *  .  *  .  *", off);
+        printf("\n");
+        print_gradient(":::     :::  ::::::::  ::::::::::: :::::::::                   ::::::::  :::    ::: :::::::::: :::        :::        ", off);
+        print_gradient(":+:     :+: :+:    :+:     :+:     :+:    :+:                 :+:    :+: :+:    :+: :+:        :+:        :+:        ", off);
+        print_gradient("+:+     +:+ +:+    +:+     +:+     +:+    +:+                 +:+        +:+    +:+ +:+        +:+        +:+        ", off);
+        print_gradient("+#+     +:+ +#+    +:+     +#+     +#+    +:+  +#++:++#++:++  +#++:++#++ +#++:++#++ +#++:++#   +#+        +#+        ", off);
+        print_gradient(" +#+   +#+  +#+    +#+     +#+     +#+    +#+                        +#+ +#+    +#+ +#+        +#+        +#+        ", off);
+        print_gradient("  #+#+#+#   #+#    #+#     #+#     #+#    #+#                 #+#    #+# #+#    #+# #+#        #+#        #+#        ", off);
+        print_gradient("    ###      ########  ########### #########                   ########  ###    ### ########## ########## ##########  ", off);
+        printf("\n");
+        fflush(stdout);
+        struct timespec ts = {0, 80000000L};
+        nanosleep(&ts, NULL);
+    }
+    /* final static frame */
+    printf("\033[2J\033[H");
+    print_gradient("                .  *  .  *  .  *  .  *", 0);
+    print_gradient("          .  *  .  *  .  *  .  *  .  *  .", 0);
+    print_gradient("      .  *  .  *  .  *  .  *  .  *  .  *  .", 0);
+    print_gradient("    .  *  .  *  .  *  .  *  .  *  .  *  .  *", 0);
+    print_gradient("  .  *  .  *  .  *  .  *  .  *  .  *  .  *  .", 0);
+    print_gradient(" .  *  .  *  .  *  .  *  .  *  .  *  .  *  .  .", 0);
+    print_gradient(".  *  .  *  .  *  .  *  .  *  .  *  .  *  .  *  .", 0);
+    print_gradient(" .  *  .  *  .  *  .  *  .  *  .  *  .  *  .  .", 0);
+    print_gradient("  .  *  .  *  .  *  .  *  .  *  .  *  .  *  .", 0);
+    print_gradient("    .  *  .  *  .  *  .  *  .  *  .  *  .  *", 0);
+    print_gradient("      .  *  .  *  .  *  .  *  .  *  .  *  .", 0);
+    print_gradient("          .  *  .  *  .  *  .  *  .  *  .", 0);
+    print_gradient("                .  *  .  *  .  *  .  *", 0);
     printf("\n");
-    print_gradient(":::     :::  ::::::::  ::::::::::: :::::::::                   ::::::::  :::    ::: :::::::::: :::        :::        ");
-    print_gradient(":+:     :+: :+:    :+:     :+:     :+:    :+:                 :+:    :+: :+:    :+: :+:        :+:        :+:        ");
-    print_gradient("+:+     +:+ +:+    +:+     +:+     +:+    +:+                 +:+        +:+    +:+ +:+        +:+        +:+        ");
-    print_gradient("+#+     +:+ +#+    +:+     +#+     +#+    +:+  +#++:++#++:++  +#++:++#++ +#++:++#++ +#++:++#   +#+        +#+        ");
-    print_gradient(" +#+   +#+  +#+    +#+     +#+     +#+    +#+                        +#+ +#+    +#+ +#+        +#+        +#+        ");
-    print_gradient("  #+#+#+#   #+#    #+#     #+#     #+#    #+#                 #+#    #+# #+#    #+# #+#        #+#        #+#        ");
-    print_gradient("    ###      ########  ########### #########                   ########  ###    ### ########## ########## ##########  ");
+    print_gradient(":::     :::  ::::::::  ::::::::::: :::::::::                   ::::::::  :::    ::: :::::::::: :::        :::        ", 0);
+    print_gradient(":+:     :+: :+:    :+:     :+:     :+:    :+:                 :+:    :+: :+:    :+: :+:        :+:        :+:        ", 0);
+    print_gradient("+:+     +:+ +:+    +:+     +:+     +:+    +:+                 +:+        +:+    +:+ +:+        +:+        +:+        ", 0);
+    print_gradient("+#+     +:+ +#+    +:+     +#+     +#+    +:+  +#++:++#++:++  +#++:++#++ +#++:++#++ +#++:++#   +#+        +#+        ", 0);
+    print_gradient(" +#+   +#+  +#+    +#+     +#+     +#+    +#+                        +#+ +#+    +#+ +#+        +#+        +#+        ", 0);
+    print_gradient("  #+#+#+#   #+#    #+#     #+#     #+#    #+#                 #+#    #+# #+#    #+# #+#        #+#        #+#        ", 0);
+    print_gradient("    ###      ########  ########### #########                   ########  ###    ### ########## ########## ##########  ", 0);
     printf("\n");
 }
 
