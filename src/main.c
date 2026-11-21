@@ -813,7 +813,7 @@ static void print_gradient(const char *s, int offset) {
         }
         printf("\033[38;2;%d;%d;%dm%c", r, g, b, s[i]);
     }
-    printf("\033[0m\n");
+    printf("\033[0m\033[K\n");
 }
 
 static void print_banner(void) {
@@ -877,6 +877,8 @@ static void save_history(void) {
     write_history(histfile);
 }
 
+static int anim_tick(void);
+
 int main(void) {
     const char *home = getenv("HOME");
     snprintf(histfile, sizeof(histfile), "%s/.void_shell_history", home ? home : ".");
@@ -894,6 +896,8 @@ int main(void) {
 
     print_banner();
 
+    rl_event_hook = anim_tick;
+    
     for (;;) {
         char *input = readline("\001\033[38;2;140;90;220m\002void-shell> \001\033[0m\002");
         if (!input) { /* EOF (Ctrl+D) */
@@ -907,6 +911,46 @@ int main(void) {
         free(input);
     }
 
+    return 0;
+}
+
+static int anim_tick(void) {
+    static struct timespec last = {0,0};
+    static int offset = 0;
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    long ms = (now.tv_sec-last.tv_sec)*1000 + (now.tv_nsec-last.tv_nsec)/1000000;
+    if (last.tv_sec == 0 && last.tv_nsec == 0) { last = now; return 0; }
+    if (ms < 80) return 0;
+    last = now;
+    offset++;
+
+    printf("\0337");   // save cursor
+    printf("\033[H");  // home
+    print_gradient("                .  *  .  *  .  *  .  *", offset);
+    print_gradient("          .  *  .  *  .  *  .  *  .  *  .", offset);
+    print_gradient("      .  *  .  *  .  *  .  *  .  *  .  *  .", offset);
+    print_gradient("    .  *  .  *  .  *  .  *  .  *  .  *  .  *", offset);
+    print_gradient("  .  *  .  *  .  *  .  *  .  *  .  *  .  *  .", offset);
+    print_gradient(" .  *  .  *  .  *  .  *  .  *  .  *  .  *  .  .", offset);
+    print_gradient(".  *  .  *  .  *  .  *  .  *  .  *  .  *  .  *  .", offset);
+    print_gradient(" .  *  .  *  .  *  .  *  .  *  .  *  .  *  .  .", offset);
+    print_gradient("  .  *  .  *  .  *  .  *  .  *  .  *  .  *  .", offset);
+    print_gradient("    .  *  .  *  .  *  .  *  .  *  .  *  .  *", offset);
+    print_gradient("      .  *  .  *  .  *  .  *  .  *  .  *  .", offset);
+    print_gradient("          .  *  .  *  .  *  .  *  .  *  .", offset);
+    print_gradient("                .  *  .  *  .  *  .  *", offset);
+    printf("\n");
+    print_gradient(":::     :::  ::::::::  ::::::::::: :::::::::                   ::::::::  :::    ::: :::::::::: :::        :::        ", offset);
+    print_gradient(":+:     :+: :+:    :+:     :+:     :+:    :+:                 :+:    :+: :+:    :+: :+:        :+:        :+:        ", offset);
+    print_gradient("+:+     +:+ +:+    +:+     +:+     +:+    +:+                 +:+        +:+    +:+ +:+        +:+        +:+        ", offset);
+    print_gradient("+#+     +:+ +#+    +:+     +#+     +#+    +:+  +#++:++#++:++  +#++:++#++ +#++:++#++ +#++:++#   +#+        +#+        ", offset);
+    print_gradient(" +#+   +#+  +#+    +#+     +#+     +#+    +#+                        +#+ +#+    +#+ +#+        +#+        +#+        ", offset);
+    print_gradient("  #+#+#+#   #+#    #+#     #+#     #+#    #+#                 #+#    #+# #+#    #+# #+#        #+#        #+#        ", offset);
+    print_gradient("    ###      ########  ########### #########                   ########  ###    ### ########## ########## ##########  ", offset);
+    printf("\n");
+    printf("\0338");  // restore cursor
+    fflush(stdout);
     return 0;
 }
 
