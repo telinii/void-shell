@@ -17,7 +17,7 @@ aprender sistemas operacionais e programação de baixo nível.
 - Histórico persistente com setas e Tab (readline)
 - Globbing: `*`, `?`, `[...]`
 - Expansão de `~`
-- Galáxia animada no topo (região de rolagem própria, sem conflitar com o readline)
+- Galáxia e banner animados no topo (região de rolagem própria, sem conflitar com o readline)
 
 ## Build
 

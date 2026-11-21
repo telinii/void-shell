@@ -899,6 +899,8 @@ static int anim_enabled = 0;
 static int anim_offset = 0;
 static int anim_rows = 24;
 static int anim_cols = 80;
+static int anim_logo_live = 0;    /* banner pode ser redesenhado agora? */
+static int anim_logo_pinned = 0;  /* banner esta fixo acima da regiao? */
 static struct timespec anim_last;
 
 static void anim_read_size(void) {
@@ -933,6 +935,8 @@ static void anim_draw_stars(int offset) {
 /* Render estatico: sem regiao de rolagem e sem animacao. */
 static void anim_render_static(void) {
     int rows = anim_rows, cols = anim_cols;
+    anim_logo_live = 0;
+    anim_logo_pinned = 0;
     printf("\033[r\033[2J\033[H");
     draw_block(galaxy_lines, 13, 1, cols, anim_offset);
     printf("\033[%d;1H\033[K", ANIM_HEADER_ROWS);
@@ -960,12 +964,13 @@ static void anim_render_all(void) {
     draw_block(galaxy_lines, 13, 1, cols, anim_offset);
     printf("\033[%d;1H\033[K", ANIM_HEADER_ROWS);
 
-    int region_top, prompt_row;
+    int region_top, prompt_row, logo_pinned = 0;
     if (banner_end <= rows) {
         draw_block(logo_lines, 7, banner_top, cols, anim_offset);
         prompt_row = banner_end;
         if (rows >= banner_end + 8) {
             region_top = banner_end;   /* terminal alto: banner fica fixo */
+            logo_pinned = 1;
         } else {
             region_top = banner_top;   /* terminal curto: banner rola junto */
         }
@@ -978,6 +983,9 @@ static void anim_render_all(void) {
     if (region_top < 2) region_top = 2;
     if (prompt_row < region_top) prompt_row = region_top;
     if (prompt_row > rows) prompt_row = rows;
+
+    anim_logo_pinned = logo_pinned;
+    anim_logo_live = 1;
 
     printf("\033[%d;%dr", region_top, rows);
     printf("\033[%d;1H", prompt_row);
@@ -1042,6 +1050,9 @@ static int anim_tick(void) {
     anim_offset = (anim_offset + 3) % 4096;
     printf("\033[?2026h\033[s");
     anim_draw_stars(anim_offset);
+    if (anim_logo_live) {
+        draw_block(logo_lines, 7, ANIM_HEADER_ROWS + 1, anim_cols, anim_offset);
+    }
     printf("\033[u\033[?2026l");
     fflush(stdout);
     return 0;
@@ -1111,6 +1122,7 @@ int main(void) {
             }
         }
         char *input = readline("\001\033[38;2;140;90;220m\002void-shell> \001\033[0m\002");
+        if (!anim_logo_pinned) anim_logo_live = 0;
         if (!input) { /* EOF (Ctrl+D) */
             printf("\n");
             break;
