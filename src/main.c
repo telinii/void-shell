@@ -863,7 +863,7 @@ int main(void) {
     print_banner();
 
     for (;;) {
-        char *input = readline("void-shell> ");
+        char *input = readline("\001\033[38;2;140;90;220m\002void-shell> \001\033[0m\002");
         if (!input) { /* EOF (Ctrl+D) */
             printf("\n");
             break;
