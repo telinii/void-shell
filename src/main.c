@@ -18,6 +18,7 @@
 #include <strings.h>
 #include <sys/stat.h>
 #include <limits.h>
+#include <dirent.h>
 
 #define MAX_ARGS 64
 #define MAX_CMDS 16
@@ -2045,8 +2046,8 @@ static void print_tutorial(void) {
 
     if (!full) {
         printf("%s%s%s\n", T,
-               tr("/kalc math · /lang language · /theme colors · /tutorial help",
-                  "/kalc matemática · /lang idioma · /theme cores · /tutorial ajuda"),
+               tr("Ctrl+P palette · /kalc · /lang · /theme · /tutorial",
+                  "Ctrl+P paleta · /kalc · /lang · /theme · /tutorial"),
                R);
         fflush(stdout);
         return;
@@ -2062,6 +2063,8 @@ static void print_tutorial(void) {
     printf("  %s/theme%s     %s%s%s\n", C, R, T,
            tr("change colors (galaxy, matrix...)",
               "muda as cores (galaxy, matrix...)"), R);
+    printf("  %sCtrl+P%s     %s%s%s\n", C, R, T,
+           tr("command palette (search & run)", "paleta de comandos (buscar e rodar)"), R);
     printf("  %sclear%s      %s%s%s\n", C, R, T,
            tr("clear the screen (Ctrl+L)", "limpa a tela (Ctrl+L)"), R);
     printf("  %sexit%s       %s%s%s\n", C, R, T,
@@ -2747,6 +2750,369 @@ static int theme_run(const char *start) {
     return changed;
 }
 
+/* ------------------------------------------------------------------ */
+/* Command palette (Ctrl+P)                                           */
+/* ------------------------------------------------------------------ */
+
+#define PAL_MAX       900
+#define PAL_QUERY_LEN 64
+#define PAL_LIST_TOP  6
+
+typedef struct {
+    char *text;
+    const char *desc;
+} PalItem;
+
+static PalItem pal_items[PAL_MAX];
+static int pal_nitems;
+static int pal_match[PAL_MAX];
+static int pal_score_v[PAL_MAX];
+static int pal_nmatch;
+static char pal_query[PAL_QUERY_LEN];
+static char pal_result[1024];
+static int pal_sel;
+static int pal_top;
+
+static void pal_add(const char *text, const char *desc) {
+    if (!text || !*text || pal_nitems >= PAL_MAX) return;
+    for (int i = 0; i < pal_nitems; i++)
+        if (strcmp(pal_items[i].text, text) == 0) return;
+    pal_items[pal_nitems].text = strdup(text);
+    pal_items[pal_nitems].desc = desc;
+    pal_nitems++;
+}
+
+static void pal_add_history(void) {
+    HIST_ENTRY **h = history_list();
+    if (!h) return;
+    int n = history_length;
+    int start = n > 120 ? n - 120 : 0;
+    for (int i = n - 1; i >= start; i--) {
+        const char *line = h[i] ? h[i]->line : NULL;
+        if (!line) continue;
+        while (*line == ' ' || *line == '\t') line++;
+        if (*line) pal_add(line, tr("history", "histórico"));
+    }
+}
+
+static void pal_add_path(void) {
+    const char *path = getenv("PATH");
+    if (!path) return;
+    char *copy = strdup(path);
+    if (!copy) return;
+    char *save = NULL;
+    for (char *dir = strtok_r(copy, ":", &save); dir;
+         dir = strtok_r(NULL, ":", &save)) {
+        if (pal_nitems >= PAL_MAX) break;
+        DIR *d = opendir(*dir ? dir : ".");
+        if (!d) continue;
+        struct dirent *e;
+        while ((e = readdir(d)) != NULL && pal_nitems < PAL_MAX) {
+            if (e->d_name[0] == '.') continue;
+            char full[PATH_MAX];
+            snprintf(full, sizeof(full), "%s/%s", *dir ? dir : ".", e->d_name);
+            struct stat st;
+            if (stat(full, &st) != 0) continue;
+            if (!S_ISREG(st.st_mode) || (st.st_mode & 0111) == 0) continue;
+            pal_add(e->d_name, tr("path", "path"));
+        }
+        closedir(d);
+    }
+    free(copy);
+}
+
+static void pal_collect(void) {
+    static const char *const builtins[] = {
+        "cd", "pwd", "exit", "clear", "jobs", "fg", "bg", "export",
+    };
+    static const char *const slashes[] = {
+        "/kalc", "/lang", "/theme", "/tutorial", "/help",
+    };
+    static const char *const snippets[] = {
+        "git status", "git log --oneline", "git diff", "git add .",
+        "git commit -m \"\"", "git push", "git pull", "git switch -c ",
+        "ls -la", "find . -name ", "grep -rn ",
+    };
+
+    pal_nitems = 0;
+    for (int i = 0; i < (int)(sizeof(slashes) / sizeof(slashes[0])); i++)
+        pal_add(slashes[i], tr("command", "comando"));
+    for (int i = 0; i < (int)(sizeof(builtins) / sizeof(builtins[0])); i++)
+        pal_add(builtins[i], tr("builtin", "nativo"));
+    for (int i = 0; i < (int)(sizeof(snippets) / sizeof(snippets[0])); i++)
+        pal_add(snippets[i], tr("shortcut", "atalho"));
+    pal_add_history();
+    pal_add_path();
+}
+
+static void pal_free(void) {
+    for (int i = 0; i < pal_nitems; i++) free(pal_items[i].text);
+    pal_nitems = 0;
+}
+
+/* Fuzzy: os caracteres da busca precisam aparecer em ordem no texto. */
+static int pal_fuzzy(const char *text, const char *q) {
+    if (!*q) return 0;
+    int score = 0, ti = 0, last = -2;
+    for (int qi = 0; q[qi]; qi++) {
+        unsigned char c = (unsigned char)tolower((unsigned char)q[qi]);
+        int found = -1;
+        for (int t = ti; text[t]; t++) {
+            if ((unsigned char)tolower((unsigned char)text[t]) == c) {
+                found = t;
+                break;
+            }
+        }
+        if (found < 0) return -1;
+        score += 10;
+        if (found == last + 1) score += 8;
+        if (found == 0 || text[found - 1] == ' ' || text[found - 1] == '/')
+            score += 6;
+        score -= found - ti;
+        last = found;
+        ti = found + 1;
+    }
+    score -= (int)strlen(text) / 4;
+    return score;
+}
+
+static void pal_refresh(void) {
+    pal_nmatch = 0;
+    for (int i = 0; i < pal_nitems; i++) {
+        int s = pal_fuzzy(pal_items[i].text, pal_query);
+        if (s < 0) continue;
+        int j = pal_nmatch;
+        while (j > 0 && pal_score_v[j - 1] < s) {
+            pal_score_v[j] = pal_score_v[j - 1];
+            pal_match[j] = pal_match[j - 1];
+            j--;
+        }
+        pal_score_v[j] = s;
+        pal_match[j] = i;
+        pal_nmatch++;
+    }
+    if (pal_sel >= pal_nmatch) pal_sel = pal_nmatch > 0 ? pal_nmatch - 1 : 0;
+    if (pal_sel < 0) pal_sel = 0;
+}
+
+static void pal_render(void) {
+    kalc_size();
+    int rows = kalc_rows, cols = kalc_cols;
+    int list_h = rows - PAL_LIST_TOP - 1;
+    if (list_h < 1) list_h = 1;
+    int max_top = pal_nmatch - list_h;
+    if (max_top < 0) max_top = 0;
+    if (pal_top > max_top) pal_top = max_top;
+    if (pal_sel < pal_top) pal_top = pal_sel;
+    if (pal_sel >= pal_top + list_h) pal_top = pal_sel - list_h + 1;
+
+    printf("\033[?2026h\033[2J\033[H");
+    printf("\033[2;3H%s%s%s", theme_head,
+           tr("COMMANDS :: type to search", "COMANDOS :: digite para buscar"),
+           KALC_RESET);
+    printf("\033[3;3H%s-------------------------%s", theme_dim, KALC_RESET);
+    printf("\033[4;3H%s> %s%s▌%s", theme_head, theme_text, pal_query, KALC_RESET);
+
+    for (int i = 0; i < list_h; i++) {
+        int idx = pal_top + i;
+        if (idx >= pal_nmatch) break;
+        const PalItem *it = &pal_items[pal_match[idx]];
+        int row = PAL_LIST_TOP + i;
+        int dw = 10;
+        int avail = cols - 6 - dw;
+        if (avail < 1) avail = 1;
+        printf("\033[%d;3H", row);
+        if (idx == pal_sel)
+            printf("%s  %-*.*s%*.*s%s", theme_sel, avail, avail, it->text,
+                   dw, dw, it->desc, KALC_RESET);
+        else
+            printf("%s  %-*.*s%s%s%*.*s%s", theme_text, avail, avail, it->text,
+                   KALC_RESET, theme_dim, dw, dw, it->desc, KALC_RESET);
+    }
+
+    printf("\033[%d;3H%s%d %s · %s%s", rows, theme_dim, pal_nmatch,
+           tr("results", "resultados"),
+           tr("Enter run · Tab edit · Esc close",
+              "Enter executa · Tab edita · Esc fecha"), KALC_RESET);
+    printf("\033[?2026l");
+    fflush(stdout);
+}
+
+/* Retorna 0 = cancelou, 1 = executar, 2 = editar no prompt. */
+static int pal_open(void) {
+    pal_collect();
+    pal_query[0] = '\0';
+    pal_sel = 0;
+    pal_top = 0;
+    pal_refresh();
+
+    struct termios orig, raw;
+    if (tcgetattr(STDIN_FILENO, &orig) != 0) { pal_free(); return 0; }
+    raw = orig;
+    raw.c_lflag &= ~(ICANON | ECHO | ISIG);
+    raw.c_iflag &= ~(IXON | ICRNL);
+    raw.c_cc[VMIN] = 1;
+    raw.c_cc[VTIME] = 0;
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+
+    printf("\033[?1049h\033[r\033[2J\033[H\033[?25l\033[?1000h\033[?1006h");
+    fflush(stdout);
+    kalc_size();
+    int last_rows = kalc_rows, last_cols = kalc_cols;
+    pal_render();
+
+    int action = 0;
+    int running = 1;
+    while (running) {
+        KalcKey k;
+        int got = kalc_read_key(&k, 200);
+
+        kalc_size();
+        if (kalc_rows != last_rows || kalc_cols != last_cols) {
+            last_rows = kalc_rows;
+            last_cols = kalc_cols;
+            pal_render();
+        }
+        if (!got) continue;
+
+        int changed = 0, qchanged = 0;
+        switch (k.type) {
+            case K_CHAR:
+                if (k.ch == 3 || k.ch == 7) {
+                    running = 0;
+                } else if (k.ch == '\t') {
+                    if (pal_nmatch > 0) {
+                        snprintf(pal_result, sizeof(pal_result), "%s",
+                                 pal_items[pal_match[pal_sel]].text);
+                        action = 2;
+                        running = 0;
+                    }
+                } else if (k.ch == 8 || k.ch == 127) {
+                    int l = (int)strlen(pal_query);
+                    if (l > 0) { pal_query[l - 1] = '\0'; qchanged = 1; }
+                } else if (k.ch == 21) {      /* Ctrl+U */
+                    if (pal_query[0]) { pal_query[0] = '\0'; qchanged = 1; }
+                } else if (k.ch == 23) {      /* Ctrl+W */
+                    int l = (int)strlen(pal_query);
+                    while (l > 0 && pal_query[l - 1] == ' ') l--;
+                    while (l > 0 && pal_query[l - 1] != ' ') l--;
+                    if ((int)strlen(pal_query) != l) {
+                        pal_query[l] = '\0';
+                        qchanged = 1;
+                    }
+                } else if (k.ch == 14) {      /* Ctrl+N */
+                    if (pal_nmatch > 0) {
+                        pal_sel = (pal_sel + 1) % pal_nmatch;
+                        changed = 1;
+                    }
+                } else if (k.ch == 16) {      /* Ctrl+P */
+                    if (pal_nmatch > 0) {
+                        pal_sel = (pal_sel + pal_nmatch - 1) % pal_nmatch;
+                        changed = 1;
+                    }
+                } else if (k.ch >= 32 && k.ch < 127) {
+                    int l = (int)strlen(pal_query);
+                    if (l < PAL_QUERY_LEN - 1) {
+                        pal_query[l] = (char)k.ch;
+                        pal_query[l + 1] = '\0';
+                        qchanged = 1;
+                    }
+                }
+                break;
+            case K_UP:
+                if (pal_nmatch > 0) {
+                    pal_sel = (pal_sel + pal_nmatch - 1) % pal_nmatch;
+                    changed = 1;
+                }
+                break;
+            case K_DOWN:
+                if (pal_nmatch > 0) {
+                    pal_sel = (pal_sel + 1) % pal_nmatch;
+                    changed = 1;
+                }
+                break;
+            case K_PGUP:
+                pal_sel -= 8;
+                if (pal_sel < 0) pal_sel = 0;
+                changed = 1;
+                break;
+            case K_PGDN:
+                pal_sel += 8;
+                if (pal_sel >= pal_nmatch)
+                    pal_sel = pal_nmatch > 0 ? pal_nmatch - 1 : 0;
+                changed = 1;
+                break;
+            case K_HOME:
+                pal_sel = 0;
+                changed = 1;
+                break;
+            case K_END:
+                pal_sel = pal_nmatch > 0 ? pal_nmatch - 1 : 0;
+                changed = 1;
+                break;
+            case K_ENTER:
+                if (pal_nmatch > 0) {
+                    snprintf(pal_result, sizeof(pal_result), "%s",
+                             pal_items[pal_match[pal_sel]].text);
+                    action = 1;
+                    running = 0;
+                }
+                break;
+            case K_ESC:
+                running = 0;
+                break;
+            case K_MOUSE:
+                if (k.press && k.mb == 0) {
+                    int idx = pal_top + (k.my - PAL_LIST_TOP);
+                    if (k.my >= PAL_LIST_TOP && idx >= 0 && idx < pal_nmatch) {
+                        snprintf(pal_result, sizeof(pal_result), "%s",
+                                 pal_items[pal_match[idx]].text);
+                        action = 1;
+                        running = 0;
+                    }
+                } else if (k.press && (k.mb == 64 || k.mb == 65)) {
+                    pal_sel += (k.mb == 64 ? -3 : 3);
+                    if (pal_sel < 0) pal_sel = 0;
+                    if (pal_sel >= pal_nmatch)
+                        pal_sel = pal_nmatch > 0 ? pal_nmatch - 1 : 0;
+                    changed = 1;
+                }
+                break;
+        }
+        if (!running) break;
+        if (qchanged) {
+            pal_sel = 0;
+            pal_top = 0;
+            pal_refresh();
+            changed = 1;
+        }
+        if (changed) pal_render();
+    }
+
+    printf("\033[?1006l\033[?1000l\033[?25h\033[0m\033[?1049l");
+    fflush(stdout);
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig);
+    pal_free();
+    return action;
+}
+
+static int palette_key(int count, int key) {
+    (void)count; (void)key;
+    int action = pal_open();
+    if (action == 1 || action == 2) {
+        rl_replace_line(pal_result, 0);
+        rl_point = rl_end;
+        size_t len = strlen(pal_result);
+        if (len >= 2 && strcmp(pal_result + len - 2, "\"\"") == 0)
+            rl_point = rl_end - 1;
+        if (action == 1) rl_done = 1;
+    } else {
+        rl_on_new_line();
+    }
+    rl_redisplay();
+    return 0;
+}
+
 static void save_history(void) {
     write_history(histfile);
 }
@@ -2774,6 +3140,7 @@ int main(void) {
     rl_set_keyboard_input_timeout(80000);
     rl_event_hook = anim_tick;
     rl_add_defun("void-clear-screen", anim_clear_key, '\x0c');
+    rl_add_defun("void-command-palette", palette_key, 16);
     atexit(anim_cleanup);
 
     for (;;) {

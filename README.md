@@ -27,6 +27,9 @@ aprender sistemas operacionais e programação de baixo nível.
   mostra o guia de novo
 - `/theme`: temas de cores (**Galaxy**, **Matrix**, **Synthwave**, **Mono**)
   com preview no menu; a escolha fica salva para as próximas sessões
+- `Ctrl+P`: command palette com busca fuzzy em builtins, `/comandos`,
+  histórico e executáveis do `PATH`; **Enter** executa, **Tab** edita no
+  prompt, **Esc** fecha
 - HUD fixa na última linha: diretório atual (`~`), branch do git com `*`
   quando há alterações, status e duração do último comando (`ok`/`err`),
   jobs em background, idioma, hora, uso de CPU e RAM (lidos de `/proc`)
