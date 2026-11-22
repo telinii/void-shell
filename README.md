@@ -44,7 +44,8 @@ make bundle      # compila void-shell e void-term
   **Português (Brasil)**; a escolha fica salva para as próximas sessões
   (padrão: English)
 - Guia rápido de boas-vindas ao abrir o shell; `/tutorial` (ou `/help`)
-  mostra o guia de novo
+  mostra o guia completo de novo — dentro do `void-term` ele também lista
+  os atalhos do terminal (como `F11`, tela cheia sem bordas)
 - `/theme`: temas de cores (**Galaxy**, **Matrix**, **Synthwave**, **Mono**,
   **Ocean**, **Sunset**, **Dracula**, **Nord**, **Amber**)
   com preview no menu; a escolha fica salva para as próximas sessões

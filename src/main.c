@@ -403,7 +403,7 @@ static void kalc_run(const char *start);
 static int lang_run(const char *start);
 static void lang_load(void);
 static const char *tr(const char *en, const char *pt);
-static void print_tutorial(void);
+static void print_tutorial(int force);
 static int theme_run(const char *start);
 static int anim_is_enabled(void);
 static void hud_draw(void);
@@ -1264,7 +1264,7 @@ static void run_line(char *line) {
                  (s[5] == '\0' || s[5] == ' ' || s[5] == '\t'))
             tut = 1;
         if (tut) {
-            print_tutorial();
+            print_tutorial(1);
             last_status = 0;
             return;
         }
@@ -2561,9 +2561,16 @@ static const KalcTopic kalc_topics[] = {
 #define KALC_RESET  "\033[0m"
 
 /* Guia rapido mostrado ao abrir o shell e pelo /tutorial. */
-static void print_tutorial(void) {
+static int inside_void_term(void) {
+    const char *tp = getenv("TERM_PROGRAM");
+    return tp && strcmp(tp, "void-term") == 0;
+}
+
+static void print_tutorial(int force) {
     int color = isatty(STDOUT_FILENO);
-    int full = anim_logo_pinned || !color;
+    /* /tutorial sempre mostra o guia completo; na abertura o banner pode
+       resumir para uma linha quando nao esta fixo. */
+    int full = force || anim_logo_pinned || !color;
     const char *C = color ? KALC_PURPLE : "";
     const char *T = color ? KALC_TEXT : "";
     const char *R = color ? KALC_RESET : "";
@@ -2600,6 +2607,14 @@ static void print_tutorial(void) {
     printf("  %s→%s          %s%s%s\n", C, R, T,
            tr("accept the gray suggestion (commands, paths)",
               "aceita a sugestão cinza (comandos, caminhos)"), R);
+    if (inside_void_term()) {
+        printf("  %sF11%s            %s%s%s\n", C, R, T,
+               tr("fullscreen without borders (void-term)",
+                  "tela cheia sem bordas (void-term)"), R);
+        printf("  %sCtrl+Shift+M%s  %s%s%s\n", C, R, T,
+               tr("terminal menu (tabs, splits, zoom)",
+                  "menu do terminal (abas, splits, zoom)"), R);
+    }
     printf("  %s/tutorial%s  %s%s%s\n", C, R, T,
            tr("show this guide again", "mostra este guia de novo"), R);
     fflush(stdout);
@@ -4210,7 +4225,7 @@ int main(void) {
 
     print_banner();
     anim_setup();
-    if (isatty(STDOUT_FILENO)) print_tutorial();
+    if (isatty(STDOUT_FILENO)) print_tutorial(0);
     rl_catch_signals = 0;   /* Ctrl+C e tratado por sigint_hook, sem sair */
     rl_initialize();
     rl_set_keyboard_input_timeout(80000);
