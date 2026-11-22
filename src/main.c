@@ -102,6 +102,30 @@ static const Theme themes[] = {
 };
 #define THEME_N ((int)(sizeof(themes) / sizeof(themes[0])))
 
+/* Cores de fundo do terminal (OSC 11). Independentes do tema do shell. */
+typedef struct {
+    const char *id;
+    const char *name;
+    int rgb[3];
+} TermBg;
+
+static const TermBg term_bgs[] = {
+    { "void",     "Void",      {11, 8, 18} },   /* padrao do void-term */
+    { "black",    "Black",     {0, 0, 0} },
+    { "midnight", "Midnight",  {4, 6, 12} },
+    { "slate",    "Slate",     {13, 17, 23} },
+    { "deep",     "Deep Sea",  {6, 16, 31} },
+    { "plum",     "Plum",      {20, 10, 30} },
+    { "ember",    "Ember",     {26, 15, 8} },
+    { "forest",   "Forest",    {8, 20, 14} },
+    { "wine",     "Wine",      {24, 8, 16} },
+};
+#define TERM_BG_N ((int)(sizeof(term_bgs) / sizeof(term_bgs[0])))
+
+static int current_term_bg = 0;
+static int term_bg_custom = 0;
+static int term_bg_custom_rgb[3];
+
 static int current_theme = 0;
 static char theme_prompt[24];
 static char theme_text[24];
@@ -122,6 +146,28 @@ static void theme_bg(char *buf, size_t n, const int c[3]) {
     snprintf(buf, n, "\033[48;2;%d;%d;%dm", c[0], c[1], c[2]);
 }
 
+static void term_bg_current_rgb(int rgb[3]);
+static void hud_invalidate(void);
+
+/* Cores de UI do shell (HUD e barra de selecao) derivadas do fundo do
+ * terminal, para o conjunto nao brigar com a cor escolhida. */
+static int term_bg_hud_rgb[3];
+static int term_bg_sel_rgb[3];
+
+static int lighten_channel(int v, double t) {
+    int out = (int)(v + (255 - v) * t + 0.5);
+    return out > 255 ? 255 : out;
+}
+
+static void term_bg_derive_ui(void) {
+    int rgb[3];
+    term_bg_current_rgb(rgb);
+    for (int i = 0; i < 3; i++) {
+        term_bg_hud_rgb[i] = lighten_channel(rgb[i], 0.075);
+        term_bg_sel_rgb[i] = lighten_channel(rgb[i], 0.22);
+    }
+}
+
 static void theme_build(void) {
     const Theme *t = &themes[current_theme];
     char bg[24];
@@ -132,11 +178,161 @@ static void theme_build(void) {
     theme_fg(theme_hud_dim, sizeof(theme_hud_dim), t->hud_dim);
     theme_fg(theme_ok, sizeof(theme_ok), t->ok);
     theme_fg(theme_err, sizeof(theme_err), t->err);
-    theme_bg(theme_hud_bg, sizeof(theme_hud_bg), t->hud_bg);
-    theme_bg(bg, sizeof(bg), t->sel_bg);
+    term_bg_derive_ui();
+    theme_bg(theme_hud_bg, sizeof(theme_hud_bg), term_bg_hud_rgb);
+    theme_bg(bg, sizeof(bg), term_bg_sel_rgb);
     snprintf(theme_sel, sizeof(theme_sel), "%s\033[38;2;255;255;255m", bg);
     for (int i = 0; i < 5; i++)
         theme_fg(theme_grad[i], sizeof(theme_grad[i]), t->grad[i]);
+}
+
+/* ------------------------------------------------------------------ */
+/* Fundo do terminal (OSC 11)                                          */
+/* ------------------------------------------------------------------ */
+
+static void term_bg_emit_rgb(const int rgb[3]) {
+    if (!isatty(STDOUT_FILENO)) return;
+    printf("\033]11;#%02x%02x%02x\a", rgb[0], rgb[1], rgb[2]);
+    fflush(stdout);
+}
+
+static void term_bg_current_rgb(int rgb[3]) {
+    if (term_bg_custom) {
+        rgb[0] = term_bg_custom_rgb[0];
+        rgb[1] = term_bg_custom_rgb[1];
+        rgb[2] = term_bg_custom_rgb[2];
+    } else {
+        const TermBg *b = &term_bgs[current_term_bg];
+        rgb[0] = b->rgb[0];
+        rgb[1] = b->rgb[1];
+        rgb[2] = b->rgb[2];
+    }
+}
+
+static const char *term_bg_label(void) {
+    static char buf[16];
+    int rgb[3];
+    if (!term_bg_custom) return term_bgs[current_term_bg].name;
+    term_bg_current_rgb(rgb);
+    snprintf(buf, sizeof(buf), "#%02x%02x%02x", rgb[0], rgb[1], rgb[2]);
+    return buf;
+}
+
+static int term_bg_hex_digit(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static int term_bg_parse_hex(const char *s, int rgb[3]) {
+    if (*s == '#') s++;
+    size_t n = strlen(s);
+    if (n == 3) {
+        for (int i = 0; i < 3; i++) {
+            int d = term_bg_hex_digit(s[i]);
+            if (d < 0) return 0;
+            rgb[i] = d * 17;
+        }
+        return 1;
+    }
+    if (n == 6) {
+        for (int i = 0; i < 3; i++) {
+            int hi = term_bg_hex_digit(s[i * 2]);
+            int lo = term_bg_hex_digit(s[i * 2 + 1]);
+            if (hi < 0 || lo < 0) return 0;
+            rgb[i] = hi * 16 + lo;
+        }
+        return 1;
+    }
+    return 0;
+}
+
+static int term_bg_find(const char *s) {
+    if (!s || !*s) return -1;
+    for (int i = 0; i < TERM_BG_N; i++)
+        if (strcasecmp(s, term_bgs[i].id) == 0 ||
+            strcasecmp(s, term_bgs[i].name) == 0)
+            return i;
+    if (strcasecmp(s, "default") == 0) return 0;
+    if (strcasecmp(s, "deepsea") == 0 || strcasecmp(s, "deep-sea") == 0)
+        return 4;
+    return -1;
+}
+
+static void term_bg_path(char *buf, size_t n) {
+    const char *home = getenv("HOME");
+    snprintf(buf, n, "%s/.void_shell_term_bg", home ? home : ".");
+}
+
+static void term_bg_save(void) {
+    char path[4096];
+    term_bg_path(path, sizeof(path));
+    FILE *f = fopen(path, "w");
+    if (!f) return;
+    if (term_bg_custom) {
+        int rgb[3];
+        term_bg_current_rgb(rgb);
+        fprintf(f, "#%02x%02x%02x\n", rgb[0], rgb[1], rgb[2]);
+    } else {
+        fprintf(f, "%s\n", term_bgs[current_term_bg].id);
+    }
+    fclose(f);
+}
+
+static void term_bg_load(void) {
+    current_term_bg = 0;
+    term_bg_custom = 0;
+
+    char path[4096], buf[64];
+    term_bg_path(path, sizeof(path));
+    FILE *f = fopen(path, "r");
+    if (f) {
+        if (fgets(buf, sizeof(buf), f)) {
+            buf[strcspn(buf, "\r\n")] = '\0';
+            if (buf[0] == '#') {
+                int rgb[3];
+                if (term_bg_parse_hex(buf, rgb)) {
+                    term_bg_custom = 1;
+                    memcpy(term_bg_custom_rgb, rgb, sizeof(rgb));
+                }
+            } else {
+                int idx = term_bg_find(buf);
+                if (idx >= 0) current_term_bg = idx;
+            }
+        }
+        fclose(f);
+    }
+
+    int rgb[3];
+    term_bg_current_rgb(rgb);
+    term_bg_emit_rgb(rgb);
+}
+
+static int term_bg_apply(int idx) {
+    if (idx < 0 || idx >= TERM_BG_N) return 0;
+    if (!term_bg_custom && idx == current_term_bg) return 0;
+    current_term_bg = idx;
+    term_bg_custom = 0;
+    term_bg_emit_rgb(term_bgs[idx].rgb);
+    term_bg_save();
+    theme_build();
+    hud_invalidate();
+    return 1;
+}
+
+static int term_bg_apply_hex(const char *hex) {
+    int rgb[3];
+    if (!term_bg_parse_hex(hex, rgb)) return 0;
+    if (term_bg_custom && memcmp(rgb, term_bg_custom_rgb, sizeof(rgb)) == 0)
+        return 0;
+    term_bg_custom = 1;
+    memcpy(term_bg_custom_rgb, rgb, sizeof(rgb));
+    term_bg_emit_rgb(rgb);
+    term_bg_save();
+    theme_build();
+    hud_invalidate();
+    return 1;
 }
 
 static void theme_path(char *buf, size_t n) {
@@ -989,10 +1185,16 @@ static void run_line(char *line) {
                 arg[--alen] = '\0';
             int changed = theme_run(*arg ? arg : NULL);
             anim_reapply_region();
-            if (changed) {
+            if (changed & 1) {
                 if (!anim_is_enabled()) anim_clear_screen();
                 printf("%s %s.\n", tr("Theme set to", "Tema definido para"),
                        themes[current_theme].name);
+            }
+            if (changed & 2) {
+                printf("%s %s.\n",
+                       tr("Terminal background set to",
+                          "Fundo do terminal definido para"),
+                       term_bg_label());
             }
             last_status = 0;
             return;
@@ -1391,6 +1593,10 @@ static long hud_mem_used_mb = -1;
 static long hud_mem_total_mb = -1;
 static long long hud_prev_idle = -1;
 static long long hud_prev_total = -1;
+
+static void hud_invalidate(void) {
+    hud_force = 1;
+}
 
 static int anim_is_enabled(void) {
     return anim_enabled;
@@ -2868,6 +3074,8 @@ static int lang_run(const char *start) {
 #define THEME_MENU_QUIT    (THEME_MENU_TOP + THEME_N + 1)
 #define THEME_PREVIEW_ROW  (THEME_MENU_QUIT + 2)
 #define THEME_HINT_ROW     (THEME_PREVIEW_ROW + 2)
+#define THEME_BG_COL       48
+#define THEME_BG_TOP       THEME_MENU_TOP
 
 static void theme_swatch(const Theme *t) {
     for (int i = 0; i < 10; i++) {
@@ -2879,29 +3087,87 @@ static void theme_swatch(const Theme *t) {
     printf(KALC_RESET);
 }
 
-static void theme_render(int sel) {
-    kalc_size();
-    printf("\033[?2026h\033[2J\033[H");
-    printf("\033[2;3H%s%s%s", theme_head,
+static void term_bg_swatch(const int rgb[3]) {
+    printf("\033[48;2;%d;%d;%dm    %s", rgb[0], rgb[1], rgb[2], KALC_RESET);
+}
+
+static void theme_draw_theme_column(int col, int sel, int focused) {
+    printf("\033[2;%dH%s%s%s", col, theme_head,
            tr("THEME :: shell colors", "TEMA :: cores do shell"), KALC_RESET);
-    printf("\033[3;3H%s-------------------------%s", theme_dim, KALC_RESET);
+    printf("\033[3;%dH%s-------------------------%s", col, theme_dim,
+           KALC_RESET);
     for (int i = 0; i < THEME_N; i++) {
         const Theme *t = &themes[i];
-        const char *cur = (i == current_theme) ? tr("  (current)", "  (atual)") : "";
+        const char *cur = (i == current_theme)
+                              ? tr("  (current)", "  (atual)") : "";
         char label[64];
         snprintf(label, sizeof(label), "%s%s", t->name, cur);
-        printf("\033[%d;3H", THEME_MENU_TOP + i);
-        if (i == sel)
+        printf("\033[%d;%dH", THEME_MENU_TOP + i, col);
+        if (focused && i == sel)
             printf("%s > [%d]  %-24s %s", theme_sel, i + 1, label, KALC_RESET);
         else
             printf("   [%d]  %s%-24s%s", i + 1, theme_text, label, KALC_RESET);
         theme_swatch(t);
     }
-    printf("\033[%d;3H", THEME_MENU_QUIT);
-    if (sel == THEME_N)
-        printf("%s > [q]  %s %s", theme_sel, tr("Cancel", "Cancelar"), KALC_RESET);
+    printf("\033[%d;%dH", THEME_MENU_QUIT, col);
+    if (focused && sel == THEME_N)
+        printf("%s > [q]  %s %s", theme_sel, tr("Cancel", "Cancelar"),
+               KALC_RESET);
     else
-        printf("   [q]  %s%s%s", theme_text, tr("Cancel", "Cancelar"), KALC_RESET);
+        printf("   [q]  %s%s%s", theme_text, tr("Cancel", "Cancelar"),
+               KALC_RESET);
+}
+
+static void theme_draw_bg_column(int col, int bg_sel, int focused) {
+    int cur_rgb[3];
+    term_bg_current_rgb(cur_rgb);
+    printf("\033[2;%dH%svoid-term bg color%s  %s#%02x%02x%02x%s",
+           col, theme_head, KALC_RESET, theme_dim,
+           cur_rgb[0], cur_rgb[1], cur_rgb[2], KALC_RESET);
+    printf("\033[3;%dH%s-------------------------%s", col, theme_dim,
+           KALC_RESET);
+    for (int i = 0; i < TERM_BG_N; i++) {
+        const TermBg *b = &term_bgs[i];
+        const char *cur = (!term_bg_custom && i == current_term_bg)
+                              ? tr("  (current)", "  (atual)") : "";
+        char label[64];
+        snprintf(label, sizeof(label), "%s%s", b->name, cur);
+        printf("\033[%d;%dH", THEME_BG_TOP + i, col);
+        if (focused && i == bg_sel)
+            printf("%s > [%d]  %-19s %s", theme_sel, i + 1, label, KALC_RESET);
+        else
+            printf("   [%d]  %s%-19s%s", i + 1, theme_text, label, KALC_RESET);
+        term_bg_swatch(b->rgb);
+    }
+}
+
+static void theme_render(int sel, int bg_sel, int focus) {
+    kalc_size();
+    printf("\033[?2026h\033[2J\033[H");
+
+    if (kalc_cols < 80) {
+        /* Terminal estreito (ex.: dentro de um split): mostra apenas a
+         * coluna em foco; Tab alterna entre elas. */
+        if (focus == 0) {
+            theme_draw_theme_column(3, sel, 1);
+            printf("\033[%d;3H%s%s%s", THEME_HINT_ROW, theme_dim,
+                   tr("Tab: terminal bg. Enter applies. q cancels.",
+                      "Tab: fundo do terminal. Enter aplica. q cancela."),
+                   KALC_RESET);
+        } else {
+            theme_draw_bg_column(3, bg_sel, 1);
+            printf("\033[%d;3H%s%s%s", THEME_HINT_ROW, theme_dim,
+                   tr("Tab: shell colors. Enter applies. q cancels.",
+                      "Tab: cores do shell. Enter aplica. q cancela."),
+                   KALC_RESET);
+        }
+        printf("\033[?2026l");
+        fflush(stdout);
+        return;
+    }
+
+    theme_draw_theme_column(3, sel, focus == 0);
+    theme_draw_bg_column(THEME_BG_COL, bg_sel, focus == 1);
 
     const Theme *t = &themes[sel < THEME_N ? sel : current_theme];
     printf("\033[%d;3H\033[38;2;%d;%d;%dmvoid-shell> "
@@ -2912,16 +3178,33 @@ static void theme_render(int sel) {
            t->text[0], t->text[1], t->text[2],
            t->ok[0], t->ok[1], t->ok[2]);
     printf("\033[%d;3H%s%s%s", THEME_HINT_ROW, theme_dim,
-           tr("Click a theme, or use ↑/↓ + Enter.",
-              "Clique em um tema, ou use ↑/↓ + Enter."), KALC_RESET);
+           tr("Click or ↑/↓ + Enter. Tab/←/→ column. q cancels.",
+              "Clique ou ↑/↓ + Enter. Tab/←/→ coluna. q cancela."), KALC_RESET);
     printf("\033[?2026l");
     fflush(stdout);
 }
 
-/* Retorna 1 se o tema foi alterado. */
+/* Retorna bit 0 = tema alterado, bit 1 = fundo do terminal alterado. */
 static int theme_run(const char *start) {
-    int idx = theme_find(start);
-    if (idx >= 0) return theme_apply(idx);
+    int initial_focus = 0;
+
+    if (start && strncmp(start, "bg", 2) == 0 &&
+        (start[2] == '\0' || start[2] == ' ' || start[2] == '\t')) {
+        const char *arg = start + 2;
+        while (*arg == ' ' || *arg == '\t') arg++;
+        if (*arg) {
+            int idx = term_bg_find(arg);
+            if (idx >= 0) return term_bg_apply(idx) ? 2 : 0;
+            if (term_bg_apply_hex(arg)) return 2;
+            printf("%s\n", tr("Unknown background. Use a name or #rrggbb.",
+                              "Fundo desconhecido. Use um nome ou #rrggbb."));
+            return 0;
+        }
+        initial_focus = 1;
+    } else {
+        int idx = theme_find(start);
+        if (idx >= 0) return theme_apply(idx) ? 1 : 0;
+    }
 
     if (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO)) {
         printf("%s\n", tr("THEME :: shell colors", "TEMA :: cores do shell"));
@@ -2930,6 +3213,15 @@ static int theme_run(const char *start) {
                    i == current_theme ? tr("  (current)", "  (atual)") : "");
         printf("%s\n", tr("Use /theme <name>: galaxy, matrix, synthwave, mono, ocean, sunset, dracula, nord, amber.",
                           "Use /theme <nome>: galaxy, matrix, synthwave, mono, ocean, sunset, dracula, nord, amber."));
+        printf("\nvoid-term bg color\n");
+        for (int i = 0; i < TERM_BG_N; i++)
+            printf("  [%d] %-10s #%02x%02x%02x%s\n", i + 1,
+                   term_bgs[i].name, term_bgs[i].rgb[0], term_bgs[i].rgb[1],
+                   term_bgs[i].rgb[2],
+                   (!term_bg_custom && i == current_term_bg)
+                       ? tr("  (current)", "  (atual)") : "");
+        printf("%s\n", tr("Use /theme bg <name|#rrggbb>.",
+                          "Use /theme bg <nome|#rrggbb>."));
         return 0;
     }
 
@@ -2946,9 +3238,11 @@ static int theme_run(const char *start) {
     fflush(stdout);
 
     int sel = current_theme;
+    int bg_sel = current_term_bg;
+    int focus = initial_focus;
     kalc_size();
     int last_rows = kalc_rows, last_cols = kalc_cols;
-    theme_render(sel);
+    theme_render(sel, bg_sel, focus);
 
     int changed = 0;
     int running = 1;
@@ -2960,7 +3254,7 @@ static int theme_run(const char *start) {
         if (kalc_rows != last_rows || kalc_cols != last_cols) {
             last_rows = kalc_rows;
             last_cols = kalc_cols;
-            theme_render(sel);
+            theme_render(sel, bg_sel, focus);
         }
         if (!got) continue;
 
@@ -2969,36 +3263,74 @@ static int theme_run(const char *start) {
             case K_CHAR:
                 if (k.ch == 'q' || k.ch == 'Q' || k.ch == 3) {
                     running = 0;
-                } else if (k.ch >= '1' && k.ch < '1' + THEME_N) {
+                } else if (k.ch == '\t') {
+                    focus = !focus;
+                    theme_render(sel, bg_sel, focus);
+                } else if (focus == 0 && k.ch >= '1' && k.ch < '1' + THEME_N) {
                     choose = k.ch - '1';
+                } else if (focus == 1 && k.ch >= '1' && k.ch < '1' + TERM_BG_N) {
+                    bg_sel = k.ch - '1';
+                    if (term_bg_apply(bg_sel)) changed |= 2;
+                    theme_render(sel, bg_sel, focus);
                 }
                 break;
             case K_UP:
-                sel = (sel + THEME_N) % (THEME_N + 1);
-                theme_render(sel);
+                if (focus == 0) sel = (sel + THEME_N) % (THEME_N + 1);
+                else bg_sel = (bg_sel + TERM_BG_N) % TERM_BG_N;
+                theme_render(sel, bg_sel, focus);
                 break;
             case K_DOWN:
-                sel = (sel + 1) % (THEME_N + 1);
-                theme_render(sel);
+                if (focus == 0) sel = (sel + 1) % (THEME_N + 1);
+                else bg_sel = (bg_sel + 1) % TERM_BG_N;
+                theme_render(sel, bg_sel, focus);
+                break;
+            case K_LEFT:
+                if (focus != 0) {
+                    focus = 0;
+                    theme_render(sel, bg_sel, focus);
+                }
+                break;
+            case K_RIGHT:
+                if (focus != 1) {
+                    focus = 1;
+                    theme_render(sel, bg_sel, focus);
+                }
                 break;
             case K_ENTER:
-                if (sel < THEME_N) choose = sel;
-                else running = 0;
+                if (focus == 0) {
+                    if (sel < THEME_N) choose = sel;
+                    else running = 0;
+                } else {
+                    if (term_bg_apply(bg_sel)) changed |= 2;
+                    theme_render(sel, bg_sel, focus);
+                }
                 break;
             case K_ESC:
                 running = 0;
                 break;
             case K_MOUSE:
                 if (k.press && k.mb == 0) {
-                    if (k.my >= THEME_MENU_TOP && k.my < THEME_MENU_TOP + THEME_N)
-                        choose = k.my - THEME_MENU_TOP;
-                    else if (k.my == THEME_MENU_QUIT)
+                    if (k.mx >= THEME_BG_COL &&
+                        k.my >= THEME_BG_TOP &&
+                        k.my < THEME_BG_TOP + TERM_BG_N) {
+                        focus = 1;
+                        bg_sel = k.my - THEME_BG_TOP;
+                        if (term_bg_apply(bg_sel)) changed |= 2;
+                        theme_render(sel, bg_sel, focus);
+                    } else if (k.mx < THEME_BG_COL &&
+                               k.my >= THEME_MENU_TOP &&
+                               k.my < THEME_MENU_TOP + THEME_N) {
+                        focus = 0;
+                        sel = k.my - THEME_MENU_TOP;
+                        choose = sel;
+                    } else if (k.my == THEME_MENU_QUIT) {
                         running = 0;
+                    }
                 }
                 break;
         }
         if (choose >= 0) {
-            changed = theme_apply(choose);
+            if (theme_apply(choose)) changed |= 1;
             running = 0;
         }
     }
@@ -3085,7 +3417,7 @@ static void pal_collect(void) {
         "cd", "pwd", "exit", "echo", "clear", "jobs", "fg", "bg", "export",
     };
     static const char *const slashes[] = {
-        "/kalc", "/lang", "/theme", "/tutorial", "/help",
+        "/kalc", "/lang", "/theme", "/theme bg", "/tutorial", "/help",
     };
     static const char *const snippets[] = {
         "git status", "git log --oneline", "git diff", "git add .",
@@ -3781,6 +4113,7 @@ static void save_history(void) {
 }
 
 int main(void) {
+    term_bg_load();
     theme_load();
     lang_load();
     const char *home = getenv("HOME");

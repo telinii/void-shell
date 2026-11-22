@@ -35,6 +35,12 @@ aprender sistemas operacionais e programação de baixo nível.
 - `/theme`: temas de cores (**Galaxy**, **Matrix**, **Synthwave**, **Mono**,
   **Ocean**, **Sunset**, **Dracula**, **Nord**, **Amber**)
   com preview no menu; a escolha fica salva para as próximas sessões
+- `/theme` também tem a coluna **void-term bg color**, que muda o fundo do
+  terminal (via OSC 11) independente do tema das letras: **Void**,
+  **Black**, **Midnight**, **Slate**, **Deep Sea**, **Plum**, **Ember**,
+  **Forest** e **Wine**. `Tab`/`←`/`→` alterna a coluna; também aceita
+  `/theme bg <nome|#rrggbb>`; a escolha fica salva em
+  `~/.void_shell_term_bg`
 - `Ctrl+P`: command palette com busca fuzzy em builtins, `/comandos`,
   histórico e executáveis do `PATH`; **Enter** executa, **Tab** edita no
   prompt, **Esc** fecha
