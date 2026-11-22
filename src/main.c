@@ -765,6 +765,16 @@ static int do_builtin(char **argv) {
     return 0;
 }
 
+static int is_shell_builtin(const char *name) {
+    static const char *const names[] = {
+        "exit", "clear", "cd", "pwd", "jobs", "fg", "bg",
+        "export", "unset", "set", "echo", NULL
+    };
+    for (int i = 0; names[i]; i++)
+        if (strcmp(name, names[i]) == 0) return 1;
+    return 0;
+}
+
 static void parse_command(char *seg, Command *cmd) {
     cmd->argc = 0;
     cmd->infile = NULL;
@@ -1118,7 +1128,45 @@ static void run_command_str(char *cmd) {
     nargv[newargc] = NULL;
     if (newargc == 0) return;
 
-    if (do_builtin(nargv)) return;
+    /* Builtins rodam no proprio processo: as redirecoes precisam ser
+     * aplicadas aqui (o run_external so redirege o filho). */
+    int builtin = is_shell_builtin(nargv[0]);
+    int saved_out = -1, saved_in = -1;
+    if (builtin && (infile || outfile)) {
+        fflush(stdout);
+        if (outfile) {
+            int flags = O_WRONLY | O_CREAT | (append ? O_APPEND : O_TRUNC);
+            int fd = open(outfile, flags, 0644);
+            if (fd < 0) { perror(outfile); last_status = 1; return; }
+            saved_out = dup(STDOUT_FILENO);
+            dup2(fd, STDOUT_FILENO);
+            close(fd);
+        }
+        if (infile) {
+            int fd = open(infile, O_RDONLY);
+            if (fd < 0) {
+                perror(infile);
+                last_status = 1;
+                if (saved_out >= 0) {
+                    dup2(saved_out, STDOUT_FILENO);
+                    close(saved_out);
+                }
+                return;
+            }
+            saved_in = dup(STDIN_FILENO);
+            dup2(fd, STDIN_FILENO);
+            close(fd);
+        }
+    }
+
+    int handled = do_builtin(nargv);
+
+    if (builtin && (saved_out >= 0 || saved_in >= 0)) {
+        fflush(stdout);
+        if (saved_out >= 0) { dup2(saved_out, STDOUT_FILENO); close(saved_out); }
+        if (saved_in >= 0) { dup2(saved_in, STDIN_FILENO); close(saved_in); }
+    }
+    if (handled) return;
 
     run_external(nargv, infile, outfile, append);
 }
@@ -1567,6 +1615,7 @@ static int draw_block(const char *const *lines, int n, int start_row, int cols, 
 
 #define ANIM_HEADER_ROWS 14   /* 13 linhas de estrelas + 1 linha em branco */
 #define ANIM_MIN_COLS    50
+#define LOGO_MIN_COLS    88   /* maior linha do banner (evita quebra feia) */
 #define ANIM_MIN_ROWS    16
 #define ANIM_FRAME_MS    80
 
@@ -1641,9 +1690,9 @@ static void anim_render_static(void) {
     printf("\033[r\033[2J\033[H");
     galaxy_draw_block(1, cols, galaxy_phase, galaxy_angle);
     printf("\033[%d;1H\033[K", ANIM_HEADER_ROWS);
-    int bh = block_height(logo_lines, 7, cols);
+    int bh = cols >= LOGO_MIN_COLS ? block_height(logo_lines, 7, cols) : 0;
     int prompt_row = ANIM_HEADER_ROWS + 1;
-    if (ANIM_HEADER_ROWS + 1 + bh <= rows) {
+    if (bh > 0 && ANIM_HEADER_ROWS + 1 + bh <= rows) {
         draw_block(logo_lines, 7, ANIM_HEADER_ROWS + 1, cols, anim_offset);
         prompt_row = ANIM_HEADER_ROWS + 1 + bh;
     }
@@ -1657,7 +1706,9 @@ static void anim_render_all(void) {
     int rows = anim_rows, cols = anim_cols;
     sugg_forget();
     int banner_top = ANIM_HEADER_ROWS + 1;
-    int bh = block_height(logo_lines, 7, cols);
+    /* Em painéis estreitos (splits) o banner quebra no meio das letras e
+     * vira uma bagunça. Nesse caso ele é omitido e o prompt sobe. */
+    int bh = cols >= LOGO_MIN_COLS ? block_height(logo_lines, 7, cols) : 0;
     int banner_end = banner_top + bh;
 
     printf("\033[?2026h"); /* synchronized output (kitty): sem flicker */
@@ -1670,7 +1721,7 @@ static void anim_render_all(void) {
     int region_bottom = hud ? rows - 1 : rows;
 
     int region_top, prompt_row, logo_pinned = 0, logo_live = 0;
-    if (banner_end <= rows) {
+    if (bh > 0 && banner_end <= rows) {
         draw_block(logo_lines, 7, banner_top, cols, anim_offset);
         prompt_row = banner_end;
         if (rows >= banner_end + 8) {
@@ -1835,9 +1886,11 @@ static void print_banner(void) {
         galaxy_draw_block(1, anim_cols, frame * 0.12,
                           galaxy_angle + frame * 0.015);
         printf("\033[%d;1H\033[K", ANIM_HEADER_ROWS);
-        for (int i = 0; i < 7; i++) {
-            printf("\033[%d;1H", ANIM_HEADER_ROWS + 1 + i);
-            print_gradient(logo_lines[i], off);
+        if (anim_cols >= LOGO_MIN_COLS) {
+            for (int i = 0; i < 7; i++) {
+                printf("\033[%d;1H", ANIM_HEADER_ROWS + 1 + i);
+                print_gradient(logo_lines[i], off);
+            }
         }
         fflush(stdout);
         struct timespec ts = {0, 80000000L};
