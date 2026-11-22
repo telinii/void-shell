@@ -2,3 +2,6 @@ build/
 void-shell
 *.o
 minishell
+/void-term
+term/void-term
+term/.deps/

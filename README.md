@@ -3,6 +3,19 @@
 Mini-shell educacional escrito em C, desenvolvido passo a passo para
 aprender sistemas operacionais e programação de baixo nível.
 
+## Branches
+
+- **`main`**: apenas o `void-shell`, para compilar e rodar no terminal
+  que você preferir (Konsole, kitty, alacritty, GNOME Terminal…)
+- **`with-terminal`**: o `void-shell` + o `void-term`, um terminal
+  GTK4 + VTE próprio, com build conjunta
+
+```sh
+git switch with-terminal
+make bundle      # compila void-shell e void-term
+./void-term      # o terminal já usa o void-shell compilado ao lado
+```
+
 ## Funcionalidades
 
 - REPL com prompt `void-shell>`

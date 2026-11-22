@@ -15,10 +15,23 @@ build/%.o: src/%.c
 	@mkdir -p build
 	$(CC) $(CFLAGS) -c $< -o $@
 
-clean:
-	rm -rf build $(TARGET)
+TERM_DIR = term
+
+# Terminal embutido (precisa de GTK4 + VTE para GTK4).
+term:
+	$(MAKE) -C $(TERM_DIR)
+	cp -f $(TERM_DIR)/void-term ./void-term
+
+bundle: $(TARGET) term
 
 run: $(TARGET)
 	./$(TARGET)
 
-.PHONY: all clean run
+run-term: term
+	./void-term
+
+clean:
+	rm -rf build $(TARGET) void-term
+	-$(MAKE) -C $(TERM_DIR) clean
+
+.PHONY: all clean run term bundle run-term
