@@ -794,6 +794,7 @@ static void parse_command(char *seg, Command *cmd) {
 }
 
 static void run_external(char **argv, char *infile, char *outfile, int append) {
+    fflush(stdout);  /* nao duplicar o buffer do shell no filho */
     pid_t pid = fork();
     if (pid < 0) {
         perror("fork");
@@ -879,6 +880,7 @@ static void run_pipeline(char *line) {
     }
 
     pid_t pids[MAX_CMDS];
+    fflush(stdout);  /* nao duplicar o buffer do shell nos filhos */
     for (int i = 0; i < ncmd; i++) {
         pids[i] = fork();
         if (pids[i] < 0) {
@@ -1003,6 +1005,7 @@ static void run_command_str(char *cmd) {
         int idx = find_matching(cmd, '(', ')');
         if (idx > 0) {
             char *inner = strndup(cmd + 1, idx - 1);
+            fflush(stdout);  /* nao duplicar o buffer do shell no filho */
             if (bg_current) {
                 pid_t pid = fork();
                 if (pid == 0) {
@@ -1020,6 +1023,7 @@ static void run_command_str(char *cmd) {
                 free(inner);
                 return;
             }
+            fflush(stdout);  /* nao duplicar o buffer do shell no filho */
             pid_t pid = fork();
             if (pid == 0) {
                 setpgid(0, 0);
@@ -1668,7 +1672,6 @@ static void anim_render_all(void) {
     int region_top, prompt_row, logo_pinned = 0, logo_live = 0;
     if (banner_end <= rows) {
         draw_block(logo_lines, 7, banner_top, cols, anim_offset);
-        logo_live = 1;
         prompt_row = banner_end;
         if (rows >= banner_end + 8) {
             region_top = banner_end;   /* terminal alto: banner fica fixo */
@@ -1676,6 +1679,11 @@ static void anim_render_all(void) {
         } else {
             region_top = banner_top;   /* terminal curto: banner rola junto */
         }
+        /* Só continua redesenhando o banner se ele estiver ACIMA da região
+         * de rolagem. Quando o terminal é baixo o banner fica dentro dela:
+         * redesenhá-lo a cada frame apaga o texto que rolou e faz o prompt
+         * "piscar" em cima dele. */
+        logo_live = logo_pinned;
     } else {
         prompt_row = banner_top;
         region_top = banner_top;
@@ -1792,13 +1800,16 @@ static int anim_tick(void) {
     if (galaxy_phase >= 1.0) galaxy_phase -= 1.0;
     galaxy_angle += 0.015;
     if (galaxy_angle >= 2.0 * GALAXY_PI) galaxy_angle -= 2.0 * GALAXY_PI;
-    printf("\033[?2026h\033[s");
+    /* Esconde o cursor enquanto os desenhos intermediários sao enviados: o
+     * VTE nao entende ?2026 e pode repintar no meio do frame, deixando um
+     * "fantasma" do cursor piscando em cima do banner. */
+    printf("\033[?2026h\033[?25l\033[s");
     anim_draw_stars();
     if (anim_logo_live) {
         draw_block(logo_lines, 7, ANIM_HEADER_ROWS + 1, anim_cols, anim_offset);
     }
     hud_tick();
-    printf("\033[u%s\033[?2026l", theme_text);
+    printf("\033[u%s\033[?25h\033[?2026l", theme_text);
     fflush(stdout);
     return 0;
 }
@@ -4113,6 +4124,15 @@ static void save_history(void) {
 }
 
 int main(void) {
+    /* Cada frame da animação tem milhares de sequências de cor. Com o buffer
+     * padrão (4 KiB) o VTE recebe o frame em vários writes e repinta o
+     * widget no meio dele — o resultado é um "pisca-pisca" do banner, do
+     * prompt e da própria galáxia. Um buffer grande deixa cada frame atômico
+     * (um único write no fflush do fim do tick). */
+    static char out_buf[192 * 1024];
+    if (isatty(STDOUT_FILENO))
+        setvbuf(stdout, out_buf, _IOFBF, sizeof(out_buf));
+
     term_bg_load();
     theme_load();
     lang_load();
@@ -4177,6 +4197,7 @@ int main(void) {
         if (shell_terminal >= 0) tcsetpgrp(shell_terminal, shell_pgid);
         char *input = readline(prompt);
         printf("\033[0m");
+        fflush(stdout);
         if (!anim_logo_pinned) anim_logo_live = 0;
         if (!input) { /* EOF (Ctrl+D) */
             printf("\n");
@@ -4192,6 +4213,7 @@ int main(void) {
                                (t1.tv_nsec - t0.tv_nsec) / 1000000L;
             hud_force = 1;
         }
+        fflush(stdout);
         free(input);
     }
 
